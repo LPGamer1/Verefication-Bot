@@ -1,7 +1,6 @@
 {
-  "name": "auth-bot-render",
+  "name": "auth-global-bot",
   "version": "1.0.0",
-  "description": "Bot Auth",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
