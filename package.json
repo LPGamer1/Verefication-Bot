@@ -1,7 +1,7 @@
 {
   "name": "auth-bot-render",
   "version": "1.0.0",
-  "description": "Bot de Verificação 24/7",
+  "description": "Bot Auth",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
