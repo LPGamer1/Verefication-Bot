@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ACCESS GRANTED</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap');
+        body {
+            background-color: #050505;
+            color: #00ff41;
+            font-family: 'Share Tech Mono', monospace;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+            text-align: center;
+            overflow: hidden;
+        }
+        
+        h1 { font-size: 2.5em; text-shadow: 0 0 10px #00ff41; margin-bottom: 10px; }
+        p { font-size: 1.2em; opacity: 0.8; }
+
+        .btn-container { margin-top: 30px; display: flex; gap: 15px; flex-direction: column;}
+        
+        a {
+            color: #050505;
+            background: #00ff41;
+            text-decoration: none;
+            padding: 15px 30px;
+            font-weight: bold;
+            border: 1px solid #00ff41;
+            transition: 0.3s;
+            text-transform: uppercase;
+        }
+        a:hover { background: transparent; color: #00ff41; box-shadow: 0 0 15px #00ff41; }
+        
+        .secondary { background: transparent; color: #00ff41; font-size: 0.9em; padding: 10px; border: none;}
+
+        /* Animação de sucesso */
+        .check { font-size: 4em; margin-bottom: 20px; animation: pop 0.5s ease; }
+        @keyframes pop { 0% { transform: scale(0); } 80% { transform: scale(1.2); } 100% { transform: scale(1); } }
+    </style>
+</head>
+<body>
+
+    <div class="check">✅</div>
+    <h1>ACESSO CONCEDIDO</h1>
+    <p>Vereficação confirmada. Retornando ao servidor...</p>
+
+    <div class="btn-container">
+        <a href="#" id="appLink">ABRIR NO APP</a>
+        <a href="#" id="webLink" class="secondary">Continuar no Navegador</a>
+    </div>
+
+    <script>
+        // Pega o ID do servidor enviado pelo Python
+        const guildId = "{{ guild_id }}";
+
+        // Links de Destino
+        const appUrl = "discord://-/channels/" + guildId; // Protocolo Deep Link
+        const webUrl = "https://discord.com/channels/" + guildId; // Protocolo Web
+
+        document.getElementById('appLink').href = appUrl;
+        document.getElementById('webLink').href = webUrl;
+
+        // Lógica de Redirecionamento Automático
+        window.onload = function() {
+            
+            // 1. Tenta abrir o APP imediatamente
+            window.location.href = appUrl;
+
+            // 2. Se o usuário ainda estiver na página depois de 1.5s, manda pro WEB
+            // (Isso acontece se ele não tiver o app ou estiver no PC Web)
+            setTimeout(function() {
+                // Verificação simples: se a página ainda está visível, redireciona pro Web
+                if (!document.hidden) {
+                    window.location.href = webUrl;
+                }
+            }, 1500);
+        };
+    </script>
+
+</body>
+</html>
+
