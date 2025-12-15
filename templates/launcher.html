@@ -3,61 +3,34 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>HUNTER :: REDIRECT</title>
+    <title>SECURE LAUNCHER</title>
     <style>
-        @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap');
-        body {
-            background-color: #050505;
-            color: #00ff41;
-            font-family: 'Share Tech Mono', monospace;
-            display: flex;
-            flex-direction: column;
-            justify-content: center;
-            align-items: center;
-            height: 100vh;
-            margin: 0;
-            text-align: center;
-        }
-        .loader {
-            border: 4px solid #111;
-            border-top: 4px solid #00ff41;
-            border-radius: 50%;
-            width: 40px;
-            height: 40px;
-            animation: spin 1s linear infinite;
-            margin-bottom: 20px;
-        }
+        body { background-color: #000; color: #00ff41; font-family: monospace; text-align: center; margin-top: 20%; }
+        .loader { border: 3px solid #111; border-top: 3px solid #00ff41; border-radius: 50%; width: 30px; height: 30px; animation: spin 1s infinite; margin: 0 auto 20px auto; }
         @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
-        
-        a {
-            color: #fff;
-            text-decoration: none;
-            border: 1px solid #00ff41;
-            padding: 10px 20px;
-            margin-top: 20px;
-            display: inline-block;
-            opacity: 0.5;
-            font-size: 0.8em;
-        }
-        p { max-width: 80%; text-transform: uppercase; letter-spacing: 1px;}
+        a { color: #fff; text-decoration: underline; cursor: pointer; }
     </style>
 </head>
 <body>
-
     <div class="loader"></div>
-    <h3>>> ESTABELECENDO CONEXÃO SEGURA...</h3>
-    <p>Aguarde enquanto redirecionamos para o Discord.</p>
-
-    <a href="{{ url }}">CLIQUE AQUI SE NÃO ABRIR</a>
+    <h3>>> INICIANDO PROTOCOLO DE AUTORIZAÇÃO...</h3>
+    
+    <p><a href="{{ url | safe }}">Clique aqui se não abrir automaticamente</a></p>
 
     <script>
+        // O | safe impede que o link quebre os & (scopes)
+        const targetUrl = "{{ url | safe }}";
+
         window.onload = function() {
-            // Pequeno delay para garantir que a animação apareça antes de redirecionar
+            // Tenta forçar a navegação imediata
+            // No Mobile, isso dispara o "Intent" do App do Discord
+            window.location.assign(targetUrl);
+
+            // Fallback: Se por algum motivo o assign falhar, tenta o replace após 500ms
             setTimeout(function() {
-                window.location.href = "{{ url }}";
-            }, 800);
+                window.location.replace(targetUrl);
+            }, 500);
         };
     </script>
-
 </body>
 </html>
