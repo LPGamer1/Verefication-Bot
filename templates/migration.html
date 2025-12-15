@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <title>HUNTER :: MIGRATION PROTOCOL</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap');
+        body { background-color: #050505; color: #ff3333; /* Vermelho Alerta */ font-family: 'Share Tech Mono', monospace; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; background-image: linear-gradient(rgba(255, 51, 51, 0.03) 1px, transparent 1px), linear-gradient(90deg, rgba(255, 51, 51, 0.03) 1px, transparent 1px); background-size: 20px 20px; }
+        .container { background-color: rgba(10, 10, 10, 0.95); padding: 40px; border: 1px solid #ff3333; box-shadow: 0 0 20px rgba(255, 51, 51, 0.2); width: 100%; max-width: 500px; }
+        h2 { text-align: center; border-bottom: 1px dashed #ff3333; padding-bottom: 10px; color: #ff3333; text-shadow: 0 0 5px #ff3333; }
+        label { display: block; margin-top: 15px; color: #fff; }
+        input, select { width: 100%; padding: 10px; margin-top: 5px; background: #000; border: 1px solid #555; color: #fff; font-family: 'Share Tech Mono', monospace; }
+        input:focus { border-color: #ff3333; outline: none; }
+        button { width: 100%; padding: 15px; margin-top: 25px; background: transparent; border: 1px solid #ff3333; color: #ff3333; cursor: pointer; font-weight: bold; font-size: 1.1em; transition: 0.3s; }
+        button:hover { background: #ff3333; color: #000; box-shadow: 0 0 15px #ff3333; }
+        .logs { margin-top: 20px; padding: 10px; border: 1px solid #333; background: #000; height: 150px; overflow-y: auto; font-size: 0.9em; color: #00ff41; }
+        .tab { display: flex; gap: 10px; margin-bottom: 20px; }
+        .tab-btn { flex: 1; padding: 10px; text-align: center; border: 1px solid #333; cursor: pointer; }
+        .tab-btn.active { border-color: #ff3333; background: rgba(255, 51, 51, 0.1); }
+        .hidden { display: none; }
+    </style>
+    <script>
+        function switchTab(type) {
+            document.getElementById('form-single').classList.add('hidden');
+            document.getElementById('form-mass').classList.add('hidden');
+            document.getElementById('btn-single').classList.remove('active');
+            document.getElementById('btn-mass').classList.remove('active');
+
+            document.getElementById('form-' + type).classList.remove('hidden');
+            document.getElementById('btn-' + type).classList.add('active');
+            
+            // Atualiza o input hidden
+            document.getElementById('action_type').value = type;
+        }
+    </script>
+</head>
+<body>
+
+    <div class="container">
+        <h2>>> PROTOCOLO DE MIGRAÇÃO</h2>
+        
+        <div class="tab">
+            <div id="btn-single" class="tab-btn active" onclick="switchTab('single')">ALVO ÚNICO</div>
+            <div id="btn-mass" class="tab-btn" onclick="switchTab('mass')">MIGRAÇÃO EM MASSA</div>
+        </div>
+
+        <form method="POST">
+            <input type="hidden" id="action_type" name="action_type" value="single">
+
+            <label>> SERVIDOR DE DESTINO (ID):</label>
+            <input type="text" name="target_guild_id" placeholder="Ex: 123987456..." required>
+            <small style="color: #666;">* O Bot Hunter precisa estar lá.</small>
+
+            <div id="form-single">
+                <label>> ALVO (ID ou Username):</label>
+                <input type="text" name="identifier" placeholder="Ex: 123456789 ou hunter_user">
+            </div>
+
+            <div id="form-mass" class="hidden">
+                <label>> QUANTIDADE DE USUÁRIOS:</label>
+                <input type="number" name="amount" placeholder="Ex: 50">
+                <small style="color: #666;">* Intervalo de segurança: 0.5s por usuário.</small>
+            </div>
+
+            <button type="submit">[ EXECUTAR TRANSFERÊNCIA ]</button>
+        </form>
+
+        {% if logs %}
+        <div class="logs">
+            {% for log in logs %}
+                <div>> {{ log }}</div>
+            {% endfor %}
+        </div>
+        {% endif %}
+    </div>
+
+</body>
+</html>
+
