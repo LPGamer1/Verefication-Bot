@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <title>Painel de Controle | Verify Bot</title>
+    <style>
+        body { background-color: #2c2f33; color: white; font-family: sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
+        .container { background-color: #23272a; padding: 30px; border-radius: 8px; width: 400px; box-shadow: 0 4px 15px rgba(0,0,0,0.5); }
+        input, textarea { width: 100%; padding: 10px; margin: 10px 0; background: #40444b; border: none; color: white; border-radius: 4px; box-sizing: border-box;}
+        button { width: 100%; padding: 10px; background-color: #5865F2; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: bold; }
+        button:hover { background-color: #4752c4; }
+        h2 { text-align: center; color: #5865F2; }
+        .msg { text-align: center; margin-bottom: 10px; font-weight: bold; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h2>Enviar Painel de Verificação</h2>
+        
+        {% if message %}
+        <div class="msg">{{ message }}</div>
+        {% endif %}
+
+        <form method="POST">
+            <label>ID do Canal de Envio:</label>
+            <input type="text" name="channel_id" required placeholder="Ex: 123456789...">
+
+            <label>Título do Embed:</label>
+            <input type="text" name="title" value="Verificação Necessária" required>
+
+            <label>Descrição do Embed:</label>
+            <textarea name="desc" rows="4" required>Clique no botão abaixo para se verificar e ganhar acesso ao servidor.</textarea>
+            
+            <label>URL da Imagem (Opcional):</label>
+            <input type="text" name="image_url" placeholder="https://...">
+
+            <button type="submit">ENVIAR MENSAGEM</button>
+        </form>
+    </div>
+</body>
+</html>
+
